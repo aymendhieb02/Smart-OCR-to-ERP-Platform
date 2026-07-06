@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice OCR ERP Review</title>
+  <link rel="stylesheet" href="/static/styles.css?v=dynamic-review-20260701">
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">OCR to ERP review console</p>
+        <h1>Document extraction review</h1>
+        <p class="subtitle">Upload an invoice, delivery note, receipt, or purchase order and review the same API output used by Swagger.</p>
+      </div>
+      <div class="status-card">
+        <span class="label">API</span>
+        <strong id="apiStatus">Checking...</strong>
+      </div>
+    </section>
+
+    <section class="upload-panel">
+      <label class="drop-zone" id="dropZone">
+        <input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp">
+        <span class="drop-title">Choose a document</span>
+        <span class="drop-copy">PDF, scanned PDF, JPG, PNG, or TIFF</span>
+      </label>
+      <button id="processBtn" type="button">Process document</button>
+      <div id="fileName" class="file-name">No file selected</div>
+    </section>
+
+    <section id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <span>Running OCR, candidate extraction, and validation...</span>
+    </section>
+
+    <section id="errorBox" class="error hidden"></section>
+
+    <section id="results" class="results hidden">
+      <div class="summary-grid">
+        <article class="summary-card">
+          <span class="label">Validation</span>
+          <strong id="validationStatus" class="pill">-</strong>
+        </article>
+        <article class="summary-card">
+          <span class="label">Document type</span>
+          <strong id="documentType">-</strong>
+        </article>
+        <article class="summary-card">
+          <span class="label">OCR confidence</span>
+          <strong id="ocrConfidence">-</strong>
+        </article>
+        <article class="summary-card">
+          <span class="label">ERP decision</span>
+          <strong id="erpDecision">-</strong>
+        </article>
+      </div>
+
+      <section class="panel visual-review">
+        <div class="panel-head">
+          <h2>Visual review</h2>
+          <div class="review-actions">
+            <div class="zoom-controls" aria-label="Preview zoom controls">
+              <button class="ghost small" id="zoomOutBtn" type="button">-</button>
+              <button class="ghost small" id="zoomInBtn" type="button">+</button>
+              <button class="ghost small" id="resetZoomBtn" type="button">100%</button>
+              <button class="ghost small" id="fitWidthBtn" type="button">Fit width</button>
+            </div>
+            <div class="toggles">
+              <label><input type="checkbox" id="toggleOcr" checked> OCR boxes</label>
+              <label><input type="checkbox" id="toggleLayout" checked> Layout blocks</label>
+              <label><input type="checkbox" id="toggleFields" checked> Field boxes</label>
+              <label><input type="checkbox" id="toggleLabels" checked> Confidence labels</label>
+            </div>
+          </div>
+        </div>
+        <div class="review-grid">
+          <div id="previewCanvas" class="preview-canvas">
+            <div class="note">Upload a document to show preview overlays.</div>
+          </div>
+          <aside class="review-sidebar">
+            <section id="validationSummary" class="inspector-card">
+              <span class="label">Validation explanation</span>
+              <strong>Waiting for document</strong>
+              <p>Process a file to see why it is valid or needs review.</p>
+            </section>
+            <section id="regionDetails" class="inspector-card region-details">
+              <span class="label">Selected region</span>
+              <strong>No region selected</strong>
+              <p>Click any OCR, layout, or field box to inspect it.</p>
+            </section>
+            <section class="inspector-card">
+              <span class="label">Overlay legend</span>
+              <div class="legend">
+                <span><i class="legend-supplier"></i>Supplier</span>
+                <span><i class="legend-customer"></i>Customer</span>
+                <span><i class="legend-products"></i>Products</span>
+                <span><i class="legend-totals"></i>Totals</span>
+                <span><i class="legend-field"></i>Field</span>
+                <span><i class="legend-ocr"></i>OCR</span>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel dynamic-review">
+        <div class="panel-head">
+          <div>
+            <h2>Document data review</h2>
+            <p class="panel-subtitle">Everything detected from the document, separated from ERP export decisions.</p>
+          </div>
+          <div class="filter-bar">
+            <label for="dynamicFilter">Filter</label>
+            <select id="dynamicFilter">
+              <option value="all">All</option>
+              <option value="erp">ERP only</option>
+              <option value="missing">Missing</option>
+              <option value="low_confidence">Low confidence</option>
+              <option value="unmapped">Unmapped</option>
+              <option value="manually_corrected">Manually corrected</option>
+            </select>
+          </div>
+        </div>
+        <div class="dynamic-tabs">
+          <button class="dynamic-tab active" type="button" data-dynamic-tab="visual">Visual Review</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_fields">ERP Fields</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="all_extracted_fields">All Extracted Data</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="line_items">Product Lines</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="ocr_blocks">OCR Blocks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="layout_blocks">Layout Blocks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="raw_json">Raw JSON</button>
+        </div>
+        <div id="dynamicTableHost" class="dynamic-table-host"></div>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Detected fields</h2>
+            <button class="ghost" data-copy="fieldsTable">Copy</button>
+          </div>
+          <div id="fieldsTable" class="field-table"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Validation notes</h2>
+          </div>
+          <div id="validationNotes" class="notes"></div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Line items</h2>
+        </div>
+        <div id="lineItems" class="line-items"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Field confidences</h2>
+        </div>
+        <div id="confidenceList" class="chips"></div>
+      </section>
+
+      <section class="tabs">
+        <div class="tab-buttons">
+          <button class="tab active" data-tab="erpJson">ERP JSON</button>
+          <button class="tab" data-tab="ocrText">OCR text</button>
+          <button class="tab" data-tab="debugJson">Debug candidates</button>
+          <button class="tab" data-tab="fullJson">Full response</button>
+        </div>
+        <pre id="erpJson" class="tab-panel"></pre>
+        <pre id="ocrText" class="tab-panel hidden"></pre>
+        <pre id="debugJson" class="tab-panel hidden"></pre>
+        <pre id="fullJson" class="tab-panel hidden"></pre>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js?v=dynamic-review-20260701"></script>
+</body>
+</html>

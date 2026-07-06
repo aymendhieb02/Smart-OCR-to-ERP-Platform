@@ -1,0 +1,8 @@
+ABC Services
+Matricule fiscal: 1234567A
+Facture N° FAC-2026-0015
+Date facture: 12/06/2026
+Echéance: 12/07/2026
+Total HT: 1 000,00
+TVA 19%: 190,00
+Total TTC: 1 190,00 TND

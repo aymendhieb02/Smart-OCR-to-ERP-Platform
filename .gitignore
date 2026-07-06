@@ -1,0 +1,30 @@
+﻿# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime outputs
+outputs/
+previews/
+uploads/
+*.log
+server-*.err.log
+server-*.out.log
+
+# Benchmark generated artifacts
+dataset/predictions/
+dataset/reports/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

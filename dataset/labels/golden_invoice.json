@@ -1,0 +1,15 @@
+{
+  "document_type": "invoice",
+  "supplier_name": "Vital Distribution",
+  "supplier_tax_id": "1234567A/M/000",
+  "customer_name": "PHARMA TEST SARL",
+  "customer_tax_id": "9988776B/M/000",
+  "invoice_number": "FAC-2026-0099",
+  "invoice_date": "2026-06-20",
+  "due_date": "2026-07-05",
+  "currency": "TND",
+  "amount_ht": 104.0,
+  "tva_amount": 19.76,
+  "amount_ttc": 123.76,
+  "tax_rate": 19.0
+}
