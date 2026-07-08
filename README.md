@@ -108,38 +108,19 @@ Response includes:
 
 ### Evaluate Dataset
 
+Use the tiered evaluator. It defaults to fast `smoke` mode, so development never requires processing all 8,000+ documents.
+
 ```powershell
-python scripts/evaluate_dataset.py
+python scripts/evaluate_dataset.py --mode smoke
+python scripts/evaluate_dataset.py --mode medium
+python scripts/evaluate_dataset.py --mode full --resume
+python scripts/evaluate_dataset.py --mode smoke --seed 42
+python scripts/evaluate_dataset.py --mode smoke --no-ocr-cache false
 ```
 
-Dataset format:
+Outputs are written progressively under `outputs/evaluation/runs/{run_id}`. OCR and layout caches are stored by document hash under `outputs/cache/ocr` and `outputs/cache/layout`.
 
-```text
-dataset/
-  images/
-    doc001.png
-  labels/
-    doc001.json
-```
-
-Example label:
-
-```json
-{
-  "document_type": "invoice",
-  "supplier_name": "Vital Distribution",
-  "supplier_tax_id": "1234567A/M/000",
-  "invoice_number": "FAC-2026-0042",
-  "invoice_date": "2026-05-06",
-  "due_date": "2026-05-21",
-  "amount_ht": 87.0,
-  "tva_amount": 16.531,
-  "amount_ttc": 104.751,
-  "tax_rate": 19.0
-}
-```
-
-The evaluator writes predictions and `dataset/reports/evaluation_report.json`.
+See `README_BENCHMARK.md` for the full evaluation workflow.
 
 ## ERP JSON Shape
 
