@@ -1,5 +1,11 @@
 const fileInput = document.getElementById("fileInput");
 const processBtn = document.getElementById("processBtn");
+const cameraBtn = document.getElementById("cameraBtn");
+const cameraModal = document.getElementById("cameraModal");
+const cameraVideo = document.getElementById("cameraVideo");
+const cameraCanvas = document.getElementById("cameraCanvas");
+const captureCameraBtn = document.getElementById("captureCameraBtn");
+const closeCameraBtn = document.getElementById("closeCameraBtn");
 const fileName = document.getElementById("fileName");
 const loading = document.getElementById("loading");
 const errorBox = document.getElementById("errorBox");
@@ -15,12 +21,126 @@ let fitWidth = true;
 let activeDynamicTab = "visual";
 let correctedFields = {};
 let correctedLineItems = [];
+let cameraStream = null;
+let selectedRegionPayload = null;
+
+const EDITABLE_FIELDS = [
+  "supplier_name",
+  "supplier_address",
+  "supplier_tax_id",
+  "supplier_phone",
+  "supplier_email",
+  "supplier_website",
+  "supplier_bank_iban",
+  "supplier_bank_rib",
+  "supplier_bank_swift",
+  "customer_name",
+  "customer_address",
+  "customer_tax_id",
+  "customer_phone",
+  "customer_email",
+  "invoice_number",
+  "invoice_date",
+  "due_date",
+  "currency",
+  "amount_ht",
+  "tva_amount",
+  "amount_ttc",
+  "tax_rate",
+  "purchase_order_number",
+];
+
+const NUMERIC_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate", "quantity", "unit_price", "discount", "line_total_ht", "tax_amount", "line_total_ttc", "total"]);
+const FIELD_TO_ERP_PATH = {
+  supplier_name: ["supplier", "name"],
+  supplier_address: ["supplier", "address"],
+  supplier_tax_id: ["supplier", "tax_id"],
+  customer_name: ["customer", "name"],
+  customer_address: ["customer", "address"],
+  customer_tax_id: ["customer", "tax_id"],
+  invoice_number: ["invoice", "number"],
+  invoice_date: ["invoice", "date"],
+  due_date: ["invoice", "due_date"],
+  currency: ["invoice", "currency"],
+  amount_ht: ["amounts", "ht"],
+  tva_amount: ["amounts", "tva"],
+  amount_ttc: ["amounts", "ttc"],
+  tax_rate: ["amounts", "tax_rate"],
+};
+
+const LINE_TABLE_TO_ITEM_FIELD = {
+  reference: "reference",
+  description: "description",
+  quantity: "quantity",
+  unit: "unit",
+  unit_price: "unit_price",
+  discount: "discount",
+  tax_rate: "tax_rate",
+  amount_ht: "line_total_ht",
+  tax_amount: "tax_amount",
+  amount_ttc: "line_total_ttc",
+};
 
 fileInput.addEventListener("change", () => {
   selectedFile = fileInput.files[0] || null;
   fileName.textContent = selectedFile ? selectedFile.name : "No file selected";
+  resetCorrections();
 });
 
+cameraBtn?.addEventListener("click", () => openCamera());
+closeCameraBtn?.addEventListener("click", () => closeCamera());
+cameraModal?.addEventListener("click", (event) => {
+  if (event.target === cameraModal) closeCamera();
+});
+captureCameraBtn?.addEventListener("click", () => captureCameraImage());
+document.getElementById("saveCorrectionsBtn")?.addEventListener("click", () => saveCorrections());
+
+
+async function openCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showError("Camera is not available in this browser. Try HTTPS or localhost.");
+    return;
+  }
+  hideError();
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    cameraVideo.srcObject = cameraStream;
+    cameraModal.classList.remove("hidden");
+  } catch (error) {
+    showError(`Camera could not be opened: ${error.message}`);
+  }
+}
+
+function closeCamera() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((track) => track.stop());
+    cameraStream = null;
+  }
+  if (cameraVideo) cameraVideo.srcObject = null;
+  cameraModal?.classList.add("hidden");
+}
+
+function captureCameraImage() {
+  if (!cameraVideo?.videoWidth || !cameraVideo?.videoHeight) {
+    showError("Camera is still loading. Try again in a second.");
+    return;
+  }
+  cameraCanvas.width = cameraVideo.videoWidth;
+  cameraCanvas.height = cameraVideo.videoHeight;
+  const context = cameraCanvas.getContext("2d");
+  context.drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+  cameraCanvas.toBlob((blob) => {
+    if (!blob) {
+      showError("Could not capture the image.");
+      return;
+    }
+    const timestamp = new Date().toISOString().replaceAll(":", "-").slice(0, 19);
+    selectedFile = new File([blob], `camera-invoice-${timestamp}.png`, { type: "image/png" });
+    fileName.textContent = `${selectedFile.name} (camera capture)`;
+    resetCorrections();
+    closeCamera();
+  }, "image/png", 0.95);
+}
 processBtn.addEventListener("click", async () => {
   if (!selectedFile) {
     showError("Choose a document first.");
@@ -90,6 +210,7 @@ async function checkApi() {
 }
 
 function renderResults(data) {
+  resetCorrections();
   lastResponse = data;
   const validation = data.validation || {};
   const status = validation.status || (validation.is_valid ? "valid" : "invalid");
@@ -111,10 +232,9 @@ function renderResults(data) {
   renderConfidences(data.field_confidences || {});
   renderLineItems(fields.line_items || []);
 
-  document.getElementById("erpJson").textContent = pretty(data.erp_json);
   document.getElementById("ocrText").textContent = data.extracted_text || "";
   document.getElementById("debugJson").textContent = pretty(data.extraction_debug || {});
-  document.getElementById("fullJson").textContent = pretty(data);
+  updateJsonPanels();
 
   results.classList.remove("hidden");
   renderPreview(data);
@@ -143,34 +263,22 @@ window.addEventListener("resize", () => {
 });
 
 function renderFields(fields) {
-  const visibleFields = [
-    "supplier_name",
-    "supplier_address",
-    "supplier_tax_id",
-    "customer_name",
-    "customer_address",
-    "customer_tax_id",
-    "invoice_number",
-    "invoice_date",
-    "due_date",
-    "currency",
-    "amount_ht",
-    "tva_amount",
-    "amount_ttc",
-    "tax_rate",
-    "purchase_order_number",
-  ];
   const table = document.getElementById("fieldsTable");
   table.innerHTML = "";
-  visibleFields.forEach((field) => {
+  EDITABLE_FIELDS.forEach((field) => {
     const key = document.createElement("div");
     key.textContent = field;
     const value = document.createElement("div");
-    value.textContent = fields[field] ?? "-";
+    const input = document.createElement("input");
+    input.className = "edit-input";
+    input.dataset.field = field;
+    input.value = fields[field] ?? "";
+    input.placeholder = "-";
+    input.addEventListener("input", () => updateReviewField(field, input.value));
+    value.appendChild(input);
     table.append(key, value);
   });
 }
-
 function renderNotes(data) {
   const validation = data.validation || {};
   const explanation = data.validation_explanation;
@@ -234,34 +342,237 @@ function renderConfidences(confidences) {
 
 function renderLineItems(items) {
   const box = document.getElementById("lineItems");
-  if (!items.length) {
-    box.innerHTML = '<div class="note">No line items parsed.</div>';
-    return;
-  }
-  const rows = items.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.description ?? "-")}</td>
-      <td>${formatTableValue(item.quantity)}</td>
-      <td>${formatTableValue(item.unit)}</td>
-      <td>${formatTableValue(item.unit_price)}</td>
-      <td>${formatTableValue(item.line_total_ht)}</td>
-      <td>${formatTableValue(item.tax_rate)}</td>
-      <td>${formatTableValue(item.line_total_ttc ?? item.total)}</td>
-    </tr>
-  `).join("");
+  const editableItems = items || [];
+  const rows = editableItems.map((item, index) => editableLineItemRow(item, index)).join("");
   box.innerHTML = `
+    <div class="panel-head">
+      <p class="panel-subtitle">Edit extracted product lines before using the ERP JSON.</p>
+      <div class="edit-actions">
+        <button class="ghost small" id="addLineItemBtn" type="button">Add line</button>
+      </div>
+    </div>
     <table>
       <thead>
         <tr>
           <th>Description</th><th>Quantity</th><th>Unit</th><th>Unit price</th>
-          <th>Total HT</th><th>Tax %</th><th>Total TTC</th>
+          <th>Total HT</th><th>Tax %</th><th>Total TTC</th><th>Actions</th>
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows || '<tr><td colspan="8"><div class="note">No line items parsed. Add one manually if needed.</div></td></tr>'}</tbody>
     </table>
   `;
+  box.querySelector("#addLineItemBtn")?.addEventListener("click", () => addReviewLineItem());
+  box.querySelectorAll("[data-line-field]").forEach((input) => {
+    input.addEventListener("input", () => updateReviewLineItem(Number(input.dataset.index), input.dataset.lineField, input.value));
+  });
+  box.querySelectorAll("[data-delete-line]").forEach((button) => {
+    button.addEventListener("click", () => deleteReviewLineItem(Number(button.dataset.index)));
+  });
 }
 
+function editableLineItemRow(item, index) {
+  const cells = [
+    ["description", item.description, "description-input"],
+    ["quantity", item.quantity, ""],
+    ["unit", item.unit, ""],
+    ["unit_price", item.unit_price, ""],
+    ["line_total_ht", item.line_total_ht, ""],
+    ["tax_rate", item.tax_rate, ""],
+    ["line_total_ttc", item.line_total_ttc ?? item.total, ""],
+  ].map(([field, value, className]) => `
+    <td><input class="edit-input ${className}" data-index="${index}" data-line-field="${field}" value="${escapeAttribute(value ?? "")}" placeholder="-"></td>
+  `).join("");
+  return `<tr>${cells}<td><button class="ghost small" type="button" data-delete-line data-index="${index}">Delete</button></td></tr>`;
+}
+function resetCorrections() {
+  correctedFields = {};
+  correctedLineItems = [];
+}
+
+function updateReviewField(field, rawValue) {
+  if (!lastResponse) return;
+  const value = coerceValue(field, rawValue);
+  lastResponse.detected_fields = lastResponse.detected_fields || {};
+  lastResponse.detected_fields[field] = value;
+  correctedFields[field] = {
+    original_value: correctedFields[field]?.original_value ?? getFieldOriginalValue(field),
+    corrected_value: value,
+    corrected_by: "human",
+  };
+  applyFieldToErpJson(field, value);
+  syncExpandedField(field, value);
+  syncDynamicFieldRows(field, value);
+  updateCorrectionLayer("detected_fields");
+  updateJsonPanels();
+}
+
+function getFieldOriginalValue(field) {
+  return lastResponse?.expanded_fields?.[field]?.value ?? lastResponse?.detected_fields?.[field] ?? null;
+}
+
+function applyFieldToErpJson(field, value) {
+  if (!lastResponse?.erp_json) return;
+  const path = FIELD_TO_ERP_PATH[field];
+  if (!path) return;
+  setNestedValue(lastResponse.erp_json, path, value);
+  if (path[0] === "invoice" && lastResponse.erp_json.document) {
+    setNestedValue(lastResponse.erp_json, ["document", path[1]], value);
+  }
+  syncFlatExport(field, value);
+}
+
+function syncFlatExport(field, value) {
+  if (!lastResponse.erp_export) return;
+  const map = {
+    supplier_name: "vendor_name",
+    supplier_tax_id: "vendor_tax_id",
+    invoice_number: "invoice_ref",
+    invoice_date: "invoice_date",
+    due_date: "due_date",
+    amount_ht: "amount_excl_tax",
+    tva_amount: "tax_amount",
+    amount_ttc: "amount_incl_tax",
+    currency: "currency_code",
+  };
+  if (map[field]) lastResponse.erp_export[map[field]] = value;
+}
+
+function syncExpandedField(field, value) {
+  if (!lastResponse.expanded_fields?.[field]) return;
+  lastResponse.expanded_fields[field].value = value;
+  lastResponse.expanded_fields[field].source = "manual correction";
+  lastResponse.expanded_fields[field].confidence = 1;
+}
+
+function syncDynamicFieldRows(field, value) {
+  (lastResponse.dynamic_tables || []).forEach((table) => {
+    (table.rows || []).forEach((row) => {
+      if (row.key !== field) return;
+      row.value = value;
+      row.status = "manually_corrected";
+      row.confidence = 1;
+      row.source = "manual correction";
+      row.correction = correctedFields[field];
+    });
+  });
+}
+
+function updateReviewLineItem(index, field, rawValue) {
+  if (!lastResponse) return;
+  const items = ensureLineItems();
+  items[index] = items[index] || {};
+  const value = coerceValue(field, rawValue);
+  items[index][field] = value;
+  if (field === "line_total_ttc") items[index].total = value;
+  syncLineItemsToResponse();
+  correctedLineItems.push({ row_index: index, field, corrected_value: value, corrected_by: "human" });
+  updateCorrectionLayer("line_items");
+  updateJsonPanels();
+}
+
+function addReviewLineItem() {
+  const items = ensureLineItems();
+  items.push({
+    description: "",
+    quantity: null,
+    unit: "",
+    unit_price: null,
+    line_total_ht: null,
+    tax_rate: null,
+    line_total_ttc: null,
+    total: null,
+    confidence: 1,
+    source: "manual",
+  });
+  syncLineItemsToResponse();
+  correctedLineItems.push({ row_index: items.length - 1, added: true, corrected_by: "human" });
+  renderLineItems(items);
+  renderDynamicReview();
+  updateCorrectionLayer("line_items");
+  updateJsonPanels();
+}
+
+function deleteReviewLineItem(index) {
+  const items = ensureLineItems();
+  items.splice(index, 1);
+  syncLineItemsToResponse();
+  correctedLineItems.push({ row_index: index, deleted: true, corrected_by: "human" });
+  renderLineItems(items);
+  renderDynamicReview();
+  updateCorrectionLayer("line_items");
+  updateJsonPanels();
+}
+
+function ensureLineItems() {
+  lastResponse.detected_fields = lastResponse.detected_fields || {};
+  lastResponse.detected_fields.line_items = lastResponse.detected_fields.line_items || [];
+  return lastResponse.detected_fields.line_items;
+}
+
+function syncLineItemsToResponse() {
+  const items = ensureLineItems();
+  if (lastResponse.erp_json) lastResponse.erp_json.line_items = items;
+  if (lastResponse.erp_export?.source_payload) lastResponse.erp_export.source_payload.line_items = items;
+  syncDynamicLineItemRows(items);
+}
+
+function syncDynamicLineItemRows(items) {
+  const table = (lastResponse.dynamic_tables || []).find((item) => item.id === "line_items");
+  if (!table) return;
+  table.rows = items.map((item, index) => ({
+    key: `line_item_${index + 1}`,
+    label: `Line ${index + 1}`,
+    values: {
+      row_number: index + 1,
+      reference: item.reference ?? "",
+      description: item.description ?? "",
+      quantity: item.quantity ?? "",
+      unit: item.unit ?? "",
+      unit_price: item.unit_price ?? "",
+      discount: item.discount ?? "",
+      tax_rate: item.tax_rate ?? "",
+      amount_ht: item.line_total_ht ?? "",
+      tax_amount: item.tax_amount ?? "",
+      amount_ttc: item.line_total_ttc ?? item.total ?? "",
+      confidence: item.confidence ?? 1,
+      source: item.source ?? "manual correction",
+      page: item.page ?? "",
+    },
+    source: item.source ?? "manual correction",
+    included_in_erp: true,
+    editable: true,
+    status: "manually_corrected",
+    correction: { original_value: null, corrected_value: item, corrected_by: "human" },
+  }));
+}
+
+function coerceValue(field, rawValue) {
+  const value = String(rawValue ?? "").trim();
+  if (value === "") return null;
+  if (NUMERIC_FIELDS.has(field)) {
+    const normalized = value.replace(/\s/g, "").replace(",", ".");
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+  return value;
+}
+
+function setNestedValue(target, path, value) {
+  let current = target;
+  path.slice(0, -1).forEach((part) => {
+    current[part] = current[part] || {};
+    current = current[part];
+  });
+  current[path[path.length - 1]] = value;
+}
+
+function updateJsonPanels() {
+  if (!lastResponse) return;
+  if (lastResponse.erp_export) lastResponse.erp_export.source_payload = lastResponse.erp_json;
+  document.getElementById("erpJson").textContent = pretty(lastResponse.erp_json || {});
+  document.getElementById("fullJson").textContent = pretty(lastResponse);
+  if (activeDynamicTab === "raw_json") renderDynamicReview();
+}
 function renderDynamicReview() {
   const host = document.getElementById("dynamicTableHost");
   if (!host) return;
@@ -299,7 +610,7 @@ function renderDynamicTable(table) {
     <div class="dynamic-table-summary">
       <div>
         <strong>${escapeHtml(table.title)}</strong>
-        <span class="dynamic-table-meta">${rows.length} rows · confidence ${confidence}</span>
+        <span class="dynamic-table-meta">${rows.length} rows - confidence ${confidence}</span>
       </div>
       ${table.id === "line_items" ? '<button class="ghost small" type="button" data-add-line>Add row</button>' : ""}
     </div>
@@ -330,7 +641,7 @@ function renderDynamicKeyValueRows(table, rows) {
     div.dataset.rowKey = row.key || "";
     div.innerHTML = `
       <strong>${escapeHtml(row.label || row.key || "Row")}</strong>
-      <span class="dynamic-value" contenteditable="${row.editable !== false}">${escapeHtml(displayValue(row.value))}</span>
+      <span class="dynamic-value" contenteditable="true">${escapeHtml(displayValue(row.value))}</span>
       <span>${formatConfidence(row.confidence)}</span>
       <span>${escapeHtml(row.source || "")}</span>
       <span>${escapeHtml(row.page || "")}</span>
@@ -358,7 +669,7 @@ function renderDynamicGridTable(table, rows) {
   const body = rows.map((row) => {
     const cells = columns.map((column) => `
       <td>
-        <span class="dynamic-cell" contenteditable="${column.editable !== false && row.editable !== false}" data-column="${escapeAttribute(column.key)}">${escapeHtml(displayValue(row.values?.[column.key]))}</span>
+        <span class="dynamic-cell" contenteditable="true" data-column="${escapeAttribute(column.key)}">${escapeHtml(displayValue(row.values?.[column.key]))}</span>
       </td>
     `).join("");
     const actions = table.id === "line_items"
@@ -423,10 +734,16 @@ function markCorrected(row, correctedValue, tableId, element) {
   };
   row.value = correctedValue;
   correctedFields[row.key] = row.correction;
+  if (EDITABLE_FIELDS.includes(row.key)) {
+    updateReviewField(row.key, correctedValue);
+    const fieldInput = document.querySelector(`[data-field="${cssEscape(row.key)}"]`);
+    if (fieldInput) fieldInput.value = correctedValue;
+  }
   element.classList.add("manually_corrected");
   element.querySelector(".status-chip").textContent = "manually_corrected";
   element.querySelector(".status-chip").className = "status-chip manually_corrected";
   updateCorrectionLayer(tableId);
+  updateJsonPanels();
 }
 
 function markTableCellCorrected(row, column, correctedValue, tableId, element) {
@@ -439,8 +756,16 @@ function markTableCellCorrected(row, column, correctedValue, tableId, element) {
   };
   row.values[column] = correctedValue;
   correctedLineItems.push({ row_key: row.key, column, corrected_value: correctedValue, corrected_by: "human" });
+  if (tableId === "line_items") {
+    const index = Math.max(0, Number(String(row.key || "").replace(/\D/g, "")) - 1);
+    const itemField = LINE_TABLE_TO_ITEM_FIELD[column] || column;
+    updateReviewLineItem(index, itemField, correctedValue);
+    const lineInput = document.querySelector(`[data-index="${index}"][data-line-field="${cssEscape(itemField)}"]`);
+    if (lineInput) lineInput.value = correctedValue;
+  }
   element.classList.add("manually_corrected");
   updateCorrectionLayer(tableId);
+  updateJsonPanels();
 }
 
 function addDynamicLineItem(table) {
@@ -475,8 +800,27 @@ function addDynamicLineItem(table) {
     },
   };
   table.rows.push(newRow);
+  const items = ensureLineItems();
+  items.push({
+    reference: "",
+    description: "",
+    quantity: null,
+    unit: "",
+    unit_price: null,
+    discount: null,
+    tax_rate: null,
+    line_total_ht: null,
+    tax_amount: null,
+    line_total_ttc: null,
+    total: null,
+    confidence: 1,
+    source: "manual",
+  });
+  syncLineItemsToResponse();
   correctedLineItems.push({ row_key: newRow.key, added: true, corrected_by: "human" });
+  renderLineItems(items);
   renderDynamicReview();
+  updateJsonPanels();
 }
 
 function updateCorrectionLayer(tableId) {
@@ -592,6 +936,7 @@ function addBox(stage, bbox, scaleX, scaleY, type, label, confidence, payload) {
 }
 
 function showRegionDetails(type, label, payload) {
+  selectedRegionPayload = { type, label, payload };
   const fields = Array.isArray(payload?.fields) && payload.fields.length ? payload.fields.join(", ") : "-";
   const text = payload?.text ?? payload?.value ?? label ?? "-";
   regionDetails.innerHTML = `
@@ -604,10 +949,120 @@ function showRegionDetails(type, label, payload) {
       <div class="inspector-row"><span>Source</span><div>${escapeHtml(payload?.source ?? "-")}</div></div>
       <div class="inspector-row"><span>Fields</span><div>${escapeHtml(fields)}</div></div>
     </div>
+    <div class="edit-actions region-actions">
+      <select id="regionFieldSelect" class="edit-input">
+        ${EDITABLE_FIELDS.map((field) => `<option value="${field}">${field}</option>`).join("")}
+      </select>
+      <button class="ghost small" id="useRegionValueBtn" type="button">Use text</button>
+      <button class="ghost small" id="rejectRegionBtn" type="button">Reject</button>
+    </div>
     <pre>${escapeHtml(pretty(payload))}</pre>
   `;
+  document.getElementById("useRegionValueBtn")?.addEventListener("click", () => useSelectedRegionAsField());
+  document.getElementById("rejectRegionBtn")?.addEventListener("click", () => rejectSelectedRegion());
 }
 
+
+async function saveCorrections() {
+  if (!lastResponse) {
+    showError("Process a document before saving corrections.");
+    return;
+  }
+  const payload = {
+    document_id: lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
+    source_file: lastResponse.erp_json?.metadata?.source_file || null,
+    detected_fields: lastResponse.detected_fields || {},
+    corrected_fields: buildCorrectedFieldPayload(),
+    corrected_line_items: lastResponse.detected_fields?.line_items || [],
+    corrections: buildExplicitCorrectionRecords(),
+    original_payload: lastResponse,
+  };
+  try {
+    const response = await fetch("/corrections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Could not save corrections.");
+    lastResponse.corrected_response = data;
+    lastResponse.validated_erp_json = data.validated_erp_json;
+    lastResponse.erp_json = data.validated_erp_json;
+    updateJsonPanels();
+    showTransientNote(`Saved ${data.stored_count} correction(s). ERP status: ${data.validation.status}`);
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function buildCorrectedFieldPayload() {
+  const corrected = {};
+  document.querySelectorAll("[data-field]").forEach((input) => {
+    const field = input.dataset.field;
+    const current = coerceValue(field, input.value);
+    const original = lastResponse.expanded_fields?.[field]?.value ?? null;
+    if (current !== original && current !== undefined) corrected[field] = current;
+  });
+  return corrected;
+}
+
+function buildExplicitCorrectionRecords() {
+  const records = [];
+  Object.entries(correctedFields).forEach(([fieldName, correction]) => {
+    records.push({
+      field_name: fieldName,
+      original_value: correction.original_value,
+      corrected_value: correction.corrected_value,
+      correction_type: fieldName.includes("supplier") ? "supplier" : fieldName.includes("customer") ? "customer" : fieldName.includes("amount") || fieldName.includes("tva") || fieldName.includes("tax") ? "total" : "field",
+      user_action: "edited",
+    });
+  });
+  correctedLineItems.forEach((item) => {
+    records.push({
+      field_name: item.row_key || `line_items[${item.row_index ?? "?"}]`,
+      original_value: item.original_value ?? null,
+      corrected_value: item.corrected_value ?? item,
+      correction_type: "line_item",
+      user_action: item.deleted ? "rejected" : "edited",
+      line_item_index: item.row_index ?? null,
+    });
+  });
+  return records;
+}
+
+function useSelectedRegionAsField() {
+  if (!selectedRegionPayload) return;
+  const field = document.getElementById("regionFieldSelect")?.value;
+  const value = selectedRegionPayload.payload?.text ?? selectedRegionPayload.payload?.value ?? selectedRegionPayload.label ?? "";
+  if (!field || !value) return;
+  const input = document.querySelector(`[data-field="${cssEscape(field)}"]`);
+  if (input) input.value = value;
+  updateReviewField(field, value);
+}
+
+function rejectSelectedRegion() {
+  if (!selectedRegionPayload) return;
+  const field = document.getElementById("regionFieldSelect")?.value || selectedRegionPayload.payload?.field || "unknown";
+  correctedFields[field] = {
+    original_value: selectedRegionPayload.payload?.value ?? selectedRegionPayload.payload?.text ?? selectedRegionPayload.label,
+    corrected_value: null,
+    corrected_by: "human",
+    user_action: "rejected",
+  };
+  updateCorrectionLayer("visual_region");
+  showTransientNote(`Rejected candidate for ${field}.`);
+}
+
+function showTransientNote(message) {
+  hideError();
+  const notes = document.getElementById("validationNotes");
+  if (!notes) return;
+  const div = document.createElement("div");
+  div.className = "note success-note";
+  div.textContent = message;
+  notes.prepend(div);
+  setTimeout(() => div.remove(), 3500);
+}
 function resetRegionDetails() {
   regionDetails.innerHTML = `
     <span class="label">Selected region</span>

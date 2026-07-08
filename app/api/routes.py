@@ -4,11 +4,14 @@ import sys
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.core.schemas import ERPFlatExport, ERPInvoiceJSON, ProcessInvoiceResponse
+from app.core.schemas import CorrectionResponse, CorrectionSubmission, ERPFlatExport, ERPInvoiceJSON, ProcessInvoiceResponse
+from app.services.correction_store import submit_corrections
 from app.services.document_classifier import classify_document
+from app.services.document_layout import analyze_document_layout
 from app.services.dynamic_tables import build_dynamic_review_payload
 from app.services.erp_mapper import build_erp_json, map_to_flat_erp
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
+from app.services.extraction_quality import apply_extraction_quality_gate, build_validated_erp_json
 from app.services.field_extractor import extract_with_candidates
 from app.services.file_loader import load_document, save_upload_to_temp
 from app.services.json_writer import write_erp_json
@@ -35,15 +38,23 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
 
         layout_analyzer = LayoutAnalyzer(ocr_result.lines)
         layout_blocks = layout_analyzer.detect_layout_blocks()
+        layout_debug = analyze_document_layout(ocr_result.lines)
         classification = classify_document(ocr_result.raw_text, ocr_result.lines)
         fields, candidates, field_confidences, extraction_debug = extract_with_candidates(
             ocr_result.raw_text,
             ocr_result.lines,
             classification,
         )
+        quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
+        fields = quality_gate.sanitized_fields
         expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
         field_boxes = build_field_boxes(expanded_fields)
+        extraction_debug["layout_analysis"] = layout_debug
         validation = validate_invoice(fields, ocr_result, classification)
+        validation.warnings.extend(quality_gate.validation_report.get("warnings", []))
+        if quality_gate.validation_report.get("extraction_status") == "needs_review" and validation.status == "valid":
+            validation.status = "needs_review"
+            validation.is_valid = False
         validation_explanation = build_validation_explanation(validation)
         erp_json = build_erp_json(
             fields=fields,
@@ -66,7 +77,9 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
             erp_json=erp_json,
         )
         write_erp_json(erp_json)
+        validated_erp_json = build_validated_erp_json(erp_json, quality_gate.validation_report)
         erp_export = map_to_flat_erp(erp_json)
+        erp_export.source_payload = validated_erp_json
         return ProcessInvoiceResponse(
             extracted_text=ocr_result.raw_text,
             document_preview=document_preview,
@@ -85,6 +98,14 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
             validation_explanation=validation_explanation,
             erp_json=erp_json,
             erp_export=erp_export,
+            validated_erp_json=validated_erp_json,
+            review_candidates=quality_gate.review_candidates,
+            rejected_candidates=quality_gate.rejected_candidates,
+            all_ocr_blocks=ocr_result.lines,
+            table_candidates=layout_debug.get("tables", []),
+            line_items_validated=quality_gate.line_items_validated,
+            line_items_needs_review=quality_gate.line_items_needs_review,
+            validation_report=quality_gate.validation_report,
         )
     except HTTPException:
         raise
@@ -96,6 +117,14 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
 
+
+
+@router.post("/corrections", response_model=CorrectionResponse)
+async def submit_invoice_corrections(payload: CorrectionSubmission) -> CorrectionResponse:
+    try:
+        return submit_corrections(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Correction submission failed: {exc}") from exc
 
 @router.post("/export-erp-json", response_model=ERPFlatExport)
 async def export_erp_json(payload: ERPInvoiceJSON) -> ERPFlatExport:

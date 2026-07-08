@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invoice OCR ERP Review</title>
-  <link rel="stylesheet" href="/static/styles.css?v=dynamic-review-20260701">
+  <link rel="stylesheet" href="/static/styles.css?v=editable-camera-20260708">
 </head>
 <body>
   <main class="app">
@@ -26,7 +26,10 @@
         <span class="drop-title">Choose a document</span>
         <span class="drop-copy">PDF, scanned PDF, JPG, PNG, or TIFF</span>
       </label>
-      <button id="processBtn" type="button">Process document</button>
+      <div class="upload-actions">
+        <button id="processBtn" type="button">Process document</button>
+        <button id="cameraBtn" class="ghost" type="button">Camera</button>
+      </div>
       <div id="fileName" class="file-name">No file selected</div>
     </section>
 
@@ -139,7 +142,10 @@
         <section class="panel">
           <div class="panel-head">
             <h2>Detected fields</h2>
-            <button class="ghost" data-copy="fieldsTable">Copy</button>
+            <div class="edit-actions">
+              <button class="ghost" data-copy="fieldsTable">Copy</button>
+              <button id="saveCorrectionsBtn" class="ghost" type="button">Save corrections</button>
+            </div>
           </div>
           <div id="fieldsTable" class="field-table"></div>
         </section>
@@ -180,6 +186,22 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=dynamic-review-20260701"></script>
+    <section id="cameraModal" class="camera-modal hidden" aria-label="Camera capture dialog">
+      <div class="camera-card">
+        <div class="panel-head">
+          <div>
+            <h2>Capture invoice</h2>
+            <p class="panel-subtitle">Take a photo, then process it like an uploaded document.</p>
+          </div>
+          <button id="closeCameraBtn" class="ghost small" type="button">Close</button>
+        </div>
+        <video id="cameraVideo" autoplay playsinline></video>
+        <canvas id="cameraCanvas" class="hidden"></canvas>
+        <div class="camera-actions">
+          <button id="captureCameraBtn" type="button">Take picture</button>
+        </div>
+      </div>
+    </section>
+  <script src="/static/app.js?v=editable-camera-20260708"></script>
 </body>
 </html>

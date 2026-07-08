@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date as Date, datetime, timezone
 from typing import Any
@@ -137,6 +137,12 @@ class Candidate(BaseModel):
     page: int | None = None
     line_index: int | None = None
     bbox: BoundingBox | None = None
+    normalized_value: Any = None
+    confidence: float | None = None
+    rejected: bool = False
+    rejection_reason: str | None = None
+    evidence_text: str | None = None
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
 
 
 class FieldExtractionDetail(BaseModel):
@@ -146,6 +152,10 @@ class FieldExtractionDetail(BaseModel):
     page: int | None = None
     line_index: int | None = None
     source: str | None = None
+    normalized_value: Any = None
+    rejection_reason: str | None = None
+    evidence_text: str | None = None
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
 
 
 class LayoutBlock(BaseModel):
@@ -204,6 +214,42 @@ class ExtractedInvoiceFields(BaseModel):
     customer_tax_id: str | None = None
     line_items: list[LineItem] = Field(default_factory=list)
 
+
+
+class CorrectionItem(BaseModel):
+    document_id: str | None = None
+    field_name: str
+    original_value: Any = None
+    corrected_value: Any = None
+    original_bbox: Any = None
+    page: int | None = None
+    confidence: float | None = None
+    source_file: str | None = None
+    source: str | None = None
+    correction_type: str = "field"
+    user_action: str = "edited"
+    line_item_index: int | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CorrectionSubmission(BaseModel):
+    document_id: str | None = None
+    source_file: str | None = None
+    detected_fields: ExtractedInvoiceFields | None = None
+    corrected_fields: dict[str, Any] = Field(default_factory=dict)
+    corrected_line_items: list[LineItem] = Field(default_factory=list)
+    corrections: list[CorrectionItem] = Field(default_factory=list)
+    original_payload: dict[str, Any] | None = None
+
+
+class CorrectionResponse(BaseModel):
+    document_id: str
+    stored_count: int
+    corrections: list[CorrectionItem] = Field(default_factory=list)
+    corrected_fields: ExtractedInvoiceFields
+    validation: ValidationResult
+    validated_erp_json: dict[str, Any]
+    memory_summary: dict[str, Any] = Field(default_factory=dict)
 
 class SupplierERP(BaseModel):
     name: str | None = None
@@ -285,6 +331,11 @@ class ProcessInvoiceResponse(BaseModel):
     validation_explanation: ValidationExplanation | None = None
     erp_json: ERPInvoiceJSON
     erp_export: ERPFlatExport
-
-
-
+    validated_erp_json: dict[str, Any] | None = None
+    review_candidates: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    rejected_candidates: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    all_ocr_blocks: list[OCRLine] = Field(default_factory=list)
+    table_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    line_items_validated: list[LineItem] = Field(default_factory=list)
+    line_items_needs_review: list[LineItem] = Field(default_factory=list)
+    validation_report: dict[str, Any] = Field(default_factory=dict)

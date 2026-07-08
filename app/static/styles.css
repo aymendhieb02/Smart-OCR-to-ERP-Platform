@@ -137,6 +137,82 @@ button {
   cursor: pointer;
 }
 
+
+.upload-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.camera-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .62);
+}
+
+.camera-card {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
+}
+
+.camera-card video {
+  width: 100%;
+  max-height: 62vh;
+  background: #0f172a;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.camera-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.edit-input {
+  width: 100%;
+  min-width: 92px;
+  border: 1px solid #c9d8ee;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: #fbfdff;
+  font: inherit;
+}
+
+.edit-input:focus,
+.dynamic-value[contenteditable="true"]:focus,
+.dynamic-cell[contenteditable="true"]:focus {
+  outline: 2px solid rgba(23, 78, 166, .22);
+  border-color: var(--blue);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.line-items table .edit-input {
+  min-width: 80px;
+}
+
+.line-items table .description-input {
+  min-width: 220px;
+}
 button:disabled {
   opacity: .55;
   cursor: not-allowed;

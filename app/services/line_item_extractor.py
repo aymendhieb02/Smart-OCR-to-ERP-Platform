@@ -1,7 +1,8 @@
-﻿import re
+import re
 from collections import defaultdict
 
 from app.core.schemas import LineItem, OCRLine
+from app.services.document_layout import group_ocr_lines, reconstruct_tables
 from app.utils.helpers import parse_amount, strip_accents
 
 
@@ -9,11 +10,11 @@ PRODUCT_CODE = r"[A-Z]{2,}[A-Z0-9]*-[A-Z0-9]+"
 STOP_KEYWORDS = (
     "arrete", "conditions de paiement", "coordonnees bancaires", "banque", "rib",
     "iban", "swift", "payment terms", "bank details", "thank you", "merci",
-    "Ø´ÙƒØ±Ø§", "Ø§Ù„Ø¨Ù†Ùƒ", "Ø§Ù„Ø­Ø³Ø§Ø¨ Ø§Ù„Ø¨Ù†ÙƒÙŠ",
+    "Ã˜Â´Ã™Æ’Ã˜Â±Ã˜Â§", "Ã˜Â§Ã™â€žÃ˜Â¨Ã™â€ Ã™Æ’", "Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â³Ã˜Â§Ã˜Â¨ Ã˜Â§Ã™â€žÃ˜Â¨Ã™â€ Ã™Æ’Ã™Å ",
 )
 REJECT_KEYWORDS = (
     "rib", "iban", "swift", "banque", "bank", "email", "tel", "address",
-    "adresse", "mf", "ice", "phone", "Ø±Ù‚Ù… Ø§Ù„Ù‡Ø§ØªÙ", "Ø§Ù„Ø¨Ø±ÙŠØ¯ Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ",
+    "adresse", "mf", "ice", "phone", "Ã˜Â±Ã™â€šÃ™â€¦ Ã˜Â§Ã™â€žÃ™â€¡Ã˜Â§Ã˜ÂªÃ™Â", "Ã˜Â§Ã™â€žÃ˜Â¨Ã˜Â±Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â¥Ã™â€žÃ™Æ’Ã˜ÂªÃ˜Â±Ã™Ë†Ã™â€ Ã™Å ",
 )
 
 
@@ -41,6 +42,12 @@ def extract_line_items(text: str, blocks: list[OCRLine] | None = None) -> list[L
 def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
     if not blocks:
         return []
+    reconstructed_items = _extract_reconstructed_table_items([block for block in blocks if block.bbox])
+    if reconstructed_items:
+        return reconstructed_items
+    anchored_items = _extract_anchored_table_rows([block for block in blocks if block.bbox])
+    if anchored_items:
+        return anchored_items
     rows = _group_blocks_by_row([block for block in blocks if block.bbox])
     header_seen = False
     items: list[LineItem] = []
@@ -141,6 +148,252 @@ def _parse_flexible_line_item(line: str) -> LineItem | None:
         source="flexible numeric row",
     )
 
+
+
+def _extract_reconstructed_table_items(blocks: list[OCRLine]) -> list[LineItem]:
+    if not blocks:
+        return []
+    tables = reconstruct_tables(blocks, group_ocr_lines(blocks))
+    if not tables:
+        return []
+    items: list[LineItem] = []
+    for table in tables[:1]:
+        for row in table.rows:
+            values = row.get("values", {})
+            description = values.get("description")
+            quantity = values.get("quantity")
+            unit_price = values.get("unit_price")
+            total = values.get("total")
+            tax_rate = values.get("tax_rate")
+            unit = values.get("unit")
+            if not description or quantity is None or total is None:
+                continue
+            if unit_price is None and quantity:
+                unit_price = round(total / quantity, 3)
+            line_total_ht = round(quantity * unit_price, 3) if quantity is not None and unit_price is not None else total
+            items.append(LineItem(
+                description=description,
+                quantity=quantity,
+                unit=unit,
+                unit_price=unit_price,
+                line_total_ht=line_total_ht,
+                tax_rate=tax_rate,
+                line_total_ttc=total,
+                total=total,
+                confidence=row.get("confidence") or table.confidence,
+                bbox=row.get("bbox"),
+                page=table.page,
+                source="reconstructed table",
+            ))
+    return items if len(items) >= 1 else []
+def _extract_anchored_table_rows(blocks: list[OCRLine]) -> list[LineItem]:
+    if not blocks:
+        return []
+    ordered = sorted(blocks, key=lambda block: (block.page_number, block.bbox.y1, block.bbox.x1))
+    header = _detect_table_columns(ordered)
+    if not header:
+        return []
+    header_y = header["y"]
+    stop_y = _detect_table_stop_y(ordered, header_y)
+    anchors = _detect_row_anchors(ordered, header_y, stop_y, header)
+    if len(anchors) < 2:
+        return []
+
+    items: list[LineItem] = []
+    for index, anchor in enumerate(anchors):
+        next_anchor = anchors[index + 1] if index + 1 < len(anchors) else None
+        top = max(header_y + 2, anchor.bbox.y1 - 8)
+        bottom = (next_anchor.bbox.y1 - 8) if next_anchor else stop_y
+        band = [
+            block for block in ordered
+            if block.page_number == anchor.page_number
+            and block.bbox.y1 >= top
+            and block.bbox.y1 < bottom
+            and not _is_summary_or_header_text(block.text)
+        ]
+        item = _parse_anchored_band(anchor, band, header)
+        if item:
+            items.append(item)
+    return items if len(items) >= 2 else []
+
+
+def _detect_table_columns(blocks: list[OCRLine]) -> dict[str, float] | None:
+    candidates: list[dict[str, float]] = []
+    for block in blocks:
+        lower = strip_accents(block.text).lower()
+        if "description" not in lower and "designation" not in lower:
+            continue
+        same_line = [
+            other for other in blocks
+            if other.page_number == block.page_number
+            and abs(_center_y(other) - _center_y(block)) <= 18
+        ]
+        header: dict[str, float] = {"y": block.bbox.y2, "description_x": block.bbox.x1}
+        for other in same_line:
+            text = strip_accents(other.text).lower()
+            if any(word in text for word in ("quantity", "qty", "qte", "qte livree")):
+                header["quantity_x"] = _center_x(other)
+            elif "price" in text or "prix" in text or "unit" in text:
+                header["price_x"] = _center_x(other)
+            elif "total" in text:
+                header["total_x"] = _center_x(other)
+        if "quantity_x" in header and ("price_x" in header or "total_x" in header):
+            candidates.append(header)
+    if candidates:
+        return sorted(candidates, key=lambda item: item["y"])[0]
+    return None
+
+
+def _detect_table_stop_y(blocks: list[OCRLine], header_y: float) -> float:
+    stop_words = ("subtotal", "sub total", "sous-total", "sales tax", "tax", "tva", "shipping", "total due", "total ttc", "amount due")
+    stop_candidates = [
+        block.bbox.y1 for block in blocks
+        if block.bbox.y1 > header_y
+        and any(word in strip_accents(block.text).lower() for word in stop_words)
+    ]
+    if stop_candidates:
+        return min(stop_candidates)
+    return max(block.bbox.y2 for block in blocks) + 20
+
+
+def _detect_row_anchors(blocks: list[OCRLine], header_y: float, stop_y: float, header: dict[str, float]) -> list[OCRLine]:
+    description_x = header.get("description_x", 120)
+    anchors: list[OCRLine] = []
+    seen: set[tuple[int, int]] = set()
+    for block in blocks:
+        if block.bbox.y1 <= header_y or block.bbox.y1 >= stop_y:
+            continue
+        text = block.text.strip()
+        if not re.fullmatch(r"0?\d{1,3}", text):
+            continue
+        value = int(text)
+        if value <= 0 or value > 500:
+            continue
+        if block.bbox.x1 > description_x - 8:
+            continue
+        key = (block.page_number, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        anchors.append(block)
+    return sorted(anchors, key=lambda block: (block.page_number, block.bbox.y1, block.bbox.x1))
+
+
+def _parse_anchored_band(anchor: OCRLine, band: list[OCRLine], header: dict[str, float]) -> LineItem | None:
+    quantity_x = header.get("quantity_x")
+    price_x = header.get("price_x")
+    total_x = header.get("total_x")
+    if quantity_x is None or total_x is None:
+        return None
+    desc_right = quantity_x - 28
+    description_blocks = [
+        block for block in band
+        if block is not anchor
+        and block.bbox.x1 > anchor.bbox.x2 + 5
+        and block.bbox.x1 < desc_right
+    ]
+    description = _join_description_blocks(description_blocks)
+    if not description:
+        return None
+
+    quantity = _nearest_numeric_value(band, quantity_x, anchor, max_distance=55, integer_preferred=True)
+    unit_price = _nearest_numeric_value(band, price_x, anchor, max_distance=75) if price_x is not None else None
+    total = _nearest_numeric_value(band, total_x, anchor, max_distance=75)
+    if quantity is None or total is None:
+        return None
+    if unit_price is None and quantity:
+        unit_price = round(total / quantity, 3)
+    line_total_ht = round(quantity * unit_price, 3) if quantity is not None and unit_price is not None else total
+    boxes = [block.bbox for block in band if block.bbox]
+    bbox = {
+        "x1": min(box.x1 for box in boxes),
+        "y1": min(box.y1 for box in boxes),
+        "x2": max(box.x2 for box in boxes),
+        "y2": max(box.y2 for box in boxes),
+    } if boxes else None
+    confidences = [block.confidence for block in band if block.confidence is not None]
+    confidence = round(sum(confidences) / len(confidences), 3) if confidences else None
+    return LineItem(
+        description=description,
+        quantity=quantity,
+        unit_price=unit_price,
+        line_total_ht=line_total_ht,
+        line_total_ttc=total,
+        total=total,
+        confidence=confidence,
+        bbox=bbox,
+        page=anchor.page_number,
+        source="anchored table row",
+    )
+
+
+def _nearest_numeric_value(
+    blocks: list[OCRLine],
+    column_x: float,
+    anchor: OCRLine,
+    max_distance: float,
+    integer_preferred: bool = False,
+) -> float | None:
+    candidates: list[tuple[float, float, OCRLine]] = []
+    anchor_y = _center_y(anchor)
+    for block in blocks:
+        if block is anchor:
+            continue
+        value = _parse_money_or_number(block.text)
+        if value is None:
+            continue
+        distance_x = abs(_center_x(block) - column_x)
+        if distance_x > max_distance:
+            continue
+        if integer_preferred and not float(value).is_integer():
+            continue
+        distance_y = abs(_center_y(block) - anchor_y)
+        candidates.append((distance_x + distance_y * 0.25, value, block))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0])[0][1]
+
+
+def _join_description_blocks(blocks: list[OCRLine]) -> str:
+    parts = []
+    for block in sorted(blocks, key=lambda value: (value.bbox.y1, value.bbox.x1)):
+        text = block.text.strip(" |[]")
+        if not text:
+            continue
+        plain = strip_accents(text).lower()
+        if any(keyword in plain for keyword in REJECT_KEYWORDS):
+            continue
+        if re.fullmatch(r"0?\d{1,3}", text):
+            continue
+        parts.append(text)
+    description = " ".join(parts)
+    description = re.sub(r"\s+", " ", description).strip()
+    return description if sum(char.isalpha() for char in description) >= 3 else ""
+
+
+def _parse_money_or_number(text: str) -> float | None:
+    clean = text.strip()
+    if not clean:
+        return None
+    if not re.search(r"\d", clean):
+        return None
+    if re.search(r"[A-Za-z]{2,}", clean) and not re.search(r"[$â‚¬Â£]|\d+[,.]\d{2}\b", clean):
+        return None
+    match = re.search(r"[$â‚¬Â£]?\s*[-+]?\d+(?:[,.]\d+)?", clean)
+    return parse_amount(match.group(0)) if match else None
+
+
+def _is_summary_or_header_text(text: str) -> bool:
+    plain = strip_accents(text).lower()
+    return any(word in plain for word in ("description", "quantity", "price", "prix", "total", "subtotal", "sales tax", "shipping", "tva"))
+
+
+def _center_x(block: OCRLine) -> float:
+    return (block.bbox.x1 + block.bbox.x2) / 2
+
+
+def _center_y(block: OCRLine) -> float:
+    return (block.bbox.y1 + block.bbox.y2) / 2
 def _group_blocks_by_row(blocks: list[OCRLine]) -> list[list[OCRLine]]:
     rows: dict[int, list[OCRLine]] = defaultdict(list)
     for block in blocks:
@@ -150,7 +403,7 @@ def _group_blocks_by_row(blocks: list[OCRLine]) -> list[list[OCRLine]]:
 
 
 def _is_table_header(lower_text: str) -> bool:
-    header_words = ("description", "designation", "dÃ©signation", "qty", "qte", "quantity", "net price", "net worth", "gross", "vat", "tva")
+    header_words = ("description", "designation", "dÃƒÂ©signation", "qty", "qte", "quantity", "net price", "net worth", "gross", "vat", "tva")
     return sum(1 for word in header_words if word in lower_text) >= 2
 
 
@@ -178,7 +431,7 @@ def _parse_coordinate_row(row_blocks: list[OCRLine], pending_description: str | 
     text_blocks = [block.text for block in row_blocks if parse_amount(block.text.replace("%", "")) is None]
     description_parts = [
         text for text in text_blocks
-        if not re.fullmatch(r"[A-Z]{1,4}|UM|VAT|TVA|No\.?|each|piece|pi[eÃ¨]ce|pcs?|unit|unite|unit[eÃ©]", text, re.IGNORECASE)
+        if not re.fullmatch(r"[A-Z]{1,4}|UM|VAT|TVA|No\.?|each|piece|pi[eÃƒÂ¨]ce|pcs?|unit|unite|unit[eÃƒÂ©]", text, re.IGNORECASE)
     ]
     description = " ".join(description_parts).strip()
     if pending_description:
@@ -231,7 +484,7 @@ def _extract_row_tax_rate(row_text: str, values: list[float]) -> float | None:
 
 
 def _extract_unit(row_text: str) -> str | None:
-    match = re.search(r"\b(each|piece|pi[eÃ¨]ce|pcs?|unit|unite|unit[eÃ©])\b", row_text, re.IGNORECASE)
+    match = re.search(r"\b(each|piece|pi[eÃƒÂ¨]ce|pcs?|unit|unite|unit[eÃƒÂ©])\b", row_text, re.IGNORECASE)
     return match.group(1) if match else None
 
 
@@ -247,7 +500,3 @@ def _looks_like_row_number(numeric_blocks: list[tuple[OCRLine, float]], row_bloc
         and first_block.bbox is not None
         and first_block.bbox.x1 <= row_left + 35
     )
-
-
-
-

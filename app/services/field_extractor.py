@@ -1,14 +1,16 @@
-﻿import re
+import re
 from typing import Any
 
 from app.core.schemas import Candidate, DocumentClassification, ExtractedInvoiceFields, LineItem, OCRLine
+from app.services.correction_store import boost_candidates_from_memory
+from app.services.document_layout import analyze_document_layout, reconstruct_tables, group_ocr_lines
 from app.services.line_item_extractor import extract_line_items
 from app.utils.helpers import first_match, normalize_text, parse_amount, parse_date, strip_accents
 
 
 AMOUNT_VALUE = r"[+-]?(?:\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2,3})?|\d{1,3}(?:[.,]\d{3}){1,2}|\d+(?:[,.]\d{1,3})?)"
 AMOUNT = rf"({AMOUNT_VALUE})"
-MONEY_VALUE = r"(?:[$â‚¬]\s*)?[+-]?(?:\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2,3})?|\d{1,3}(?:[.,]\d{3}){1,2}|\d+(?:[,.]\d{1,3})?)"
+MONEY_VALUE = r"(?:[$Ã¢â€šÂ¬]\s*)?[+-]?(?:\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2,3})?|\d{1,3}(?:[.,]\d{3}){1,2}|\d+(?:[,.]\d{1,3})?)"
 DATE = r"(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})"
 PRODUCT_CODE = r"[A-Z]{2,}[A-Z0-9]*-[A-Z0-9]+"
 EMAIL_PATTERN = r"[\w.\-+]+@[\w.\-]+\.\w+"
@@ -89,14 +91,25 @@ def collect_field_candidates(
     def add(field: str, value: Any, score: float, source: str, block: OCRLine | None = None) -> None:
         if value is None or value == "":
             return
+        final_score = max(0.0, min(1.0, score + ((block.confidence or 0) * 0.08 if block else 0)))
         candidates.setdefault(field, []).append(Candidate(
             field=field,
             value=value,
-            score=max(0.0, min(1.0, score + ((block.confidence or 0) * 0.08 if block else 0))),
+            score=final_score,
             source=source,
             page=block.page_number if block else None,
             line_index=block.line_index if block else None,
             bbox=block.bbox if block else None,
+            normalized_value=value,
+            confidence=final_score,
+            evidence_text=block.text if block else None,
+            score_breakdown={
+                "layout_score": 0.25 if block and block.bbox else 0.05,
+                "label_score": min(0.35, score * 0.35),
+                "regex_score": 0.25,
+                "business_score": 0.10,
+                "consistency_score": 0.05,
+            },
         ))
 
     regex_fields = {
@@ -126,26 +139,28 @@ def collect_field_candidates(
         _add_line_candidates(add, block.text, block_plain, block.line_index or 0, block)
 
     _add_block_sequence_candidates(add, ocr_blocks or [])
+    _add_layout_aware_candidates(add, ocr_blocks or [])
     _add_spatial_date_candidates(add, ocr_blocks or [])
     _add_stacked_totals_candidates(add, text, ocr_blocks or [])
     _add_party_candidates_from_blocks(add, ocr_blocks or [])
     _add_supplier_customer_candidates(add, text)
+    boost_candidates_from_memory(candidates, text)
     _score_document_type_relevance(candidates, classification)
     return candidates
 
 
 def _extract_invoice_number(text: str) -> str | None:
     return first_match([
-        r"\binvoice\s*(?:number|num(?:ber)?|no\.?|n[oÂ°]?|#|ref(?:erence)?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
-        r"\bfacture\s*(?:n[oÂ°]?|num(?:ero)?|number|no\.?|#|ref(?:erence)?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
+        r"\binvoice\s*(?:number|num(?:ber)?|no\.?|n[oÃ‚Â°]?|#|ref(?:erence)?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
+        r"\bfacture\s*(?:n[oÃ‚Â°]?|num(?:ero)?|number|no\.?|#|ref(?:erence)?)\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
         r"\bn\s*.?\s*facture\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
-        r"\b(?:n[oÂ°]?|numero|ref(?:erence)?)\b\s*(?:facture|invoice)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
+        r"\b(?:n[oÃ‚Â°]?|numero|ref(?:erence)?)\b\s*(?:facture|invoice)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\-\/.]{2,})",
     ], text)
 
 
 def _extract_invoice_date(text: str) -> str | None:
     return first_match([
-        rf"(?:date\s*(?:de\s*)?(?:facture|invoice)|invoice\s*date|billing\s*date|issue\s*date|date\s*of\s*issue|date\s*d['â€™]?\s*(?:emission|émission)|date\s*emission|تاريخ)\s*[:#-]?\s*{DATE}",
+        rf"(?:date\s*(?:de\s*)?(?:facture|invoice)|invoice\s*date|billing\s*date|issue\s*date|date\s*of\s*issue|date\s*d['Ã¢â‚¬â„¢]?\s*(?:emission|Ã©mission)|date\s*emission|ØªØ§Ø±ÙŠØ®)\s*[:#-]?\s*{DATE}",
         rf"(?:facture\s*du|issued\s*on|emitted\s*on|emise\s*le)\s*[:#-]?\s*{DATE}",
         rf"^\s*date\s*[:#-]?\s*{DATE}",
     ], text)
@@ -153,7 +168,7 @@ def _extract_invoice_date(text: str) -> str | None:
 
 def _extract_due_date(text: str) -> str | None:
     return first_match([
-        rf"(?:echeance|date\s*d['â€™]?\s*echeance|due\s*date|payment\s*due|payable\s*by|date\s*limite)\s*[:#-]?\s*{DATE}",
+        rf"(?:echeance|date\s*d['Ã¢â‚¬â„¢]?\s*echeance|due\s*date|payment\s*due|payable\s*by|date\s*limite)\s*[:#-]?\s*{DATE}",
     ], text)
 
 
@@ -162,7 +177,7 @@ def _extract_currency(text: str) -> str | None:
     for code in ("TND", "EUR", "USD", "GBP", "MAD", "DZD", "CAD", "CHF", "AED"):
         if re.search(rf"\b{code}\b", upper):
             return code
-    if re.search(r"\bEURO(?:S)?\b", upper) or "â‚¬" in text or "Ã¢â€šÂ¬" in text:
+    if re.search(r"\bEURO(?:S)?\b", upper) or "Ã¢â€šÂ¬" in text or "ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬" in text:
         return "EUR"
     if "$" in text:
         return "USD"
@@ -244,13 +259,13 @@ def _extract_supplier_name(original: str) -> str | None:
     for index, line in enumerate(lines[:24]):
         candidate = _remove_after_keywords(line, [
             r"date\s*.*",
-            r"date\s*d.?\s*echeance", r"date\s*d.?\s*Ã©chÃ©ance",
+            r"date\s*d.?\s*echeance", r"date\s*d.?\s*ÃƒÂ©chÃƒÂ©ance",
             r"invoice\s*date", r"due\s*date", r"date\s*:",
         ])
         candidate_plain = strip_accents(candidate).lower()
         next_plain = strip_accents(lines[index + 1]).lower() if index + 1 < len(lines) else ""
         if _is_supplier_candidate(candidate_plain, candidate):
-            if any(word in next_plain for word in ("rue", "avenue", "street", "road", "tel", "tÃ©l", "phone", "mf", "tax", "ice")):
+            if any(word in next_plain for word in ("rue", "avenue", "street", "road", "tel", "tÃƒÂ©l", "phone", "mf", "tax", "ice")):
                 return _clean_name(candidate)
 
     for line in lines[:12]:
@@ -272,7 +287,7 @@ def _amount_after_label(text: str, labels: list[str], prefer_last: bool = False)
             return amounts[-1] if prefer_last else amounts[0]
 
     patterns = [
-        rf"{label}\s*[:#=\-â€“â€”]?\s*(?:\(?\s*\d{{1,2}}(?:[,.]\d{{1,2}})?\s*%\s*\)?\s*)?(?:[A-Z]{{3}}\s*)?({AMOUNT_VALUE})"
+        rf"{label}\s*[:#=\-Ã¢â‚¬â€œÃ¢â‚¬â€]?\s*(?:\(?\s*\d{{1,2}}(?:[,.]\d{{1,2}})?\s*%\s*\)?\s*)?(?:[A-Z]{{3}}\s*)?({AMOUNT_VALUE})"
         for label in labels
     ]
     return first_match(patterns, text)
@@ -357,22 +372,22 @@ def _add_line_candidates(add, line: str, line_plain: str, line_index: int, block
     labels = strip_accents(line_plain).lower()
     date_match = re.search(DATE, line_plain)
     if date_match:
-        if any(key in labels for key in ("echeance", "due date", "date limite", "Ø§Ø³ØªØ­Ù‚Ø§Ù‚")):
+        if any(key in labels for key in ("echeance", "due date", "date limite", "Ã˜Â§Ã˜Â³Ã˜ÂªÃ˜Â­Ã™â€šÃ˜Â§Ã™â€š")):
             add("due_date", date_match.group(1), 0.80, "date near due-date label", block)
-        elif "date" in labels or "Ø§Ù„ØªØ§Ø±ÙŠØ®" in labels:
+        elif "date" in labels or "Ã˜Â§Ã™â€žÃ˜ÂªÃ˜Â§Ã˜Â±Ã™Å Ã˜Â®" in labels:
             add("invoice_date", date_match.group(1), 0.78, "date near date label", block)
 
-    if any(key in labels for key in ("facture", "invoice", "n bl", "nÂ° bl", "Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø©")):
+    if any(key in labels for key in ("facture", "invoice", "n bl", "nÃ‚Â° bl", "Ã˜Â±Ã™â€šÃ™â€¦ Ã˜Â§Ã™â€žÃ™ÂÃ˜Â§Ã˜ÂªÃ™Ë†Ã˜Â±Ã˜Â©")):
         add("invoice_number", _extract_invoice_number(line_plain) or _document_number_from_line(line_plain), 0.86, "number near document label", block)
-    if any(key in labels for key in ("commande", "purchase order", "po number", "Ø·Ù„Ø¨ Ø´Ø±Ø§Ø¡")):
+    if any(key in labels for key in ("commande", "purchase order", "po number", "Ã˜Â·Ã™â€žÃ˜Â¨ Ã˜Â´Ã˜Â±Ã˜Â§Ã˜Â¡")):
         add("purchase_order_number", _extract_purchase_order(line_plain), 0.82, "order reference label", block)
 
     if any(key in labels for key in ("sous-total", "total ht", "subtotal", "hors taxe", "htva")):
         add("amount_ht", _last_amount(line), 0.86, "amount near HT/subtotal label", block)
-    if any(key in labels for key in ("tva", "vat", "tax amount", "montant tva", "Ø¶Ø±ÙŠØ¨Ø©")):
+    if any(key in labels for key in ("tva", "vat", "tax amount", "montant tva", "Ã˜Â¶Ã˜Â±Ã™Å Ã˜Â¨Ã˜Â©")):
         add("tva_amount", _last_non_percent_amount(line), 0.82, "amount near tax label", block)
         add("tax_rate", parse_amount(first_match([r"(\d{1,2}(?:[,.]\d{1,2})?)\s*%"], line)), 0.78, "tax rate percent", block)
-    is_total_line = any(key in labels for key in ("total ttc", "montant ttc", "grand total", "amount due", "ttc", "Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ", "Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹"))
+    is_total_line = any(key in labels for key in ("total ttc", "montant ttc", "grand total", "amount due", "ttc", "Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å ", "Ã˜Â§Ã™â€žÃ™â€¦Ã˜Â¬Ã™â€¦Ã™Ë†Ã˜Â¹"))
     if is_total_line:
         add("amount_ttc", _last_amount(line), 0.90, "amount near TTC/total label", block)
 
@@ -383,8 +398,8 @@ def _add_line_candidates(add, line: str, line_plain: str, line_index: int, block
 
 def _add_supplier_customer_candidates(add, text: str) -> None:
     lines = [_clean_name(line) for line in text.splitlines() if _clean_name(line)]
-    _add_party_block_candidates(add, lines, "supplier", _find_first_party_line(lines, ("seller", "supplier", "vendor", "from", "bill from", "fournisseur", "vendeur", "Ø§Ù„Ù…ÙˆØ±Ø¯", "Ø§Ù„Ù…Ø²ÙˆØ¯")))
-    _add_party_block_candidates(add, lines, "customer", _find_first_party_line(lines, ("client", "customer", "bill to", "billed to", "ship to", "acheteur", "livre a", "livrÃƒÂ© a", "livre ÃƒÂ ", "Ø§Ù„Ø¹Ù…ÙŠÙ„")))
+    _add_party_block_candidates(add, lines, "supplier", _find_first_party_line(lines, ("seller", "supplier", "vendor", "from", "bill from", "fournisseur", "vendeur", "Ã˜Â§Ã™â€žÃ™â€¦Ã™Ë†Ã˜Â±Ã˜Â¯", "Ã˜Â§Ã™â€žÃ™â€¦Ã˜Â²Ã™Ë†Ã˜Â¯")))
+    _add_party_block_candidates(add, lines, "customer", _find_first_party_line(lines, ("client", "customer", "bill to", "billed to", "ship to", "acheteur", "livre a", "livrÃƒÆ’Ã‚Â© a", "livre ÃƒÆ’Ã‚Â ", "Ã˜Â§Ã™â€žÃ˜Â¹Ã™â€¦Ã™Å Ã™â€ž")))
     client_start = _find_first_client_line(lines)
     supplier_text = "\n".join(lines[:client_start]) if client_start is not None else "\n".join(lines[:20])
     customer_text = "\n".join(lines[client_start:client_start + 14]) if client_start is not None else ""
@@ -395,7 +410,7 @@ def _add_supplier_customer_candidates(add, text: str) -> None:
         add("customer_tax_id", customer_tax_id, 0.82, "customer/client block tax id")
     for index, line in enumerate(lines[:35]):
         plain = strip_accents(line).lower()
-        if any(marker in plain for marker in ("client", "customer", "livre a", "livrÃ© a", "livre Ã ", "Ø§Ù„Ø¹Ù…ÙŠÙ„")):
+        if any(marker in plain for marker in ("client", "customer", "livre a", "livrÃƒÂ© a", "livre ÃƒÂ ", "Ã˜Â§Ã™â€žÃ˜Â¹Ã™â€¦Ã™Å Ã™â€ž")):
             for candidate in lines[index + 1:index + 5]:
                 candidate_plain = strip_accents(candidate).lower()
                 if _is_supplier_candidate(candidate_plain, candidate):
@@ -412,7 +427,7 @@ def _add_party_block_candidates(add, lines: list[str], role: str, start: int | N
         return
     label_line = lines[start]
     label_remainder = re.sub(
-        r"^(?:seller|supplier|vendor|from|bill\s*from|fournisseur|vendeur|client|customer|bill\s*to|billed\s*to|ship\s*to|acheteur|livre\s*a|livre\s*Ã )\s*[:#-]?\s*",
+        r"^(?:seller|supplier|vendor|from|bill\s*from|fournisseur|vendeur|client|customer|bill\s*to|billed\s*to|ship\s*to|acheteur|livre\s*a|livre\s*ÃƒÂ )\s*[:#-]?\s*",
         "",
         label_line,
         flags=re.IGNORECASE,
@@ -498,6 +513,83 @@ def _add_stacked_totals_candidates(add, text: str, blocks: list[OCRLine]) -> Non
 
 
 
+
+def _add_layout_aware_candidates(add, blocks: list[OCRLine]) -> None:
+    if not blocks:
+        return
+    lines = group_ocr_lines(blocks)
+    layout = analyze_document_layout(blocks)
+    logical_blocks = layout.get("blocks", [])
+
+    for line in lines:
+        plain = strip_accents(line.text).lower()
+        first_block = line.blocks[0] if line.blocks else None
+        if any(label in plain for label in ("invoice no", "invoice number", "invoice #", "facture n", "n facture", "numero", "numÃ©ro")):
+            value = _document_number_from_line(strip_accents(line.text))
+            add("invoice_number", value, 0.92, "layout label proximity: invoice number", first_block)
+        if any(label in plain for label in ("date facture", "invoice date", "date:")):
+            date_value = first_match([DATE], line.text)
+            add("invoice_date", date_value, 0.90, "layout label proximity: invoice date", first_block)
+        if any(label in plain for label in ("due date", "date d", "echeance", "Ã©chÃ©ance", "date limite")):
+            date_value = first_match([DATE], line.text)
+            add("due_date", date_value, 0.88, "layout label proximity: due date", first_block)
+
+    for block in logical_blocks:
+        block_type = block.get("block_type")
+        block_text = block.get("text") or ""
+        if block_type == "customer":
+            name = _first_party_name_after_label(block_text)
+            add("customer_name", name, 0.90, "layout customer block")
+            tax_id = _extract_supplier_tax_id(block_text)
+            add("customer_tax_id", tax_id, 0.86, "layout customer tax id")
+        elif block_type == "supplier":
+            name = _first_header_company_name(block_text)
+            add("supplier_name", name, 0.82, "layout supplier/header block")
+            tax_id = _extract_supplier_tax_id(block_text)
+            add("supplier_tax_id", tax_id, 0.84, "layout supplier tax id")
+        elif block_type == "totals":
+            _add_totals_block_candidates(add, block_text)
+
+    for table in reconstruct_tables(blocks, lines):
+        line_totals = [row.get("values", {}).get("total") for row in table.rows]
+        line_totals = [value for value in line_totals if value is not None]
+        if line_totals:
+            add("amount_ht", round(sum(line_totals), 3), 0.74, "sum of reconstructed line totals")
+
+
+def _add_totals_block_candidates(add, text: str) -> None:
+    for line in text.splitlines():
+        plain = strip_accents(line).lower()
+        if any(label in plain for label in ("subtotal", "sous-total", "total ht", "hors taxe", "htva")):
+            add("amount_ht", _last_amount(line), 0.93, "totals block HT/subtotal")
+        if any(label in plain for label in ("tva", "vat", "sales tax", "tax amount")):
+            add("tva_amount", _last_non_percent_amount(line), 0.91, "totals block tax")
+            add("tax_rate", parse_amount(first_match([r"(\d{1,2}(?:[,.]\d{1,2})?)\s*%"], line)), 0.88, "totals block tax rate")
+        if any(label in plain for label in ("total ttc", "grand total", "amount due", "total due", "net a payer", "net Ã  payer")):
+            add("amount_ttc", _last_amount(line), 0.95, "totals block TTC/amount due")
+
+
+def _first_party_name_after_label(text: str) -> str | None:
+    lines = [_clean_name(line) for line in text.splitlines() if _clean_name(line)]
+    labels = ("client", "customer", "bill to", "facture", "acheteur", "destinataire", "livre", "livrÃ©")
+    for index, line in enumerate(lines):
+        plain = strip_accents(line).lower()
+        if any(label in plain for label in labels):
+            for candidate in lines[index + 1:index + 5]:
+                if _is_company_name_line(candidate):
+                    return candidate
+    for line in lines[:5]:
+        if _is_company_name_line(line):
+            return line
+    return None
+
+
+def _first_header_company_name(text: str) -> str | None:
+    lines = [_clean_name(line) for line in text.splitlines() if _clean_name(line)]
+    for line in lines[:8]:
+        if _is_company_name_line(line):
+            return line
+    return None
 def _add_spatial_date_candidates(add, blocks: list[OCRLine]) -> None:
     ordered = sorted([block for block in blocks if block.bbox], key=lambda block: (block.page_number, block.bbox.y1, block.bbox.x1))
     for index, block in enumerate(ordered):
@@ -530,8 +622,8 @@ def _add_party_candidates_from_blocks(add, blocks: list[OCRLine]) -> None:
         return
     ordered = sorted([block for block in blocks if block.bbox], key=lambda block: (block.page_number, block.bbox.y1, block.bbox.x1))
     labels = {
-        "supplier": ("supplier", "seller", "vendor", "from", "bill from", "fournisseur", "vendeur", "المورد"),
-        "customer": ("customer", "client", "bill to", "ship to", "acheteur", "livre a", "livré a", "العميل"),
+        "supplier": ("supplier", "seller", "vendor", "from", "bill from", "fournisseur", "vendeur", "Ø§Ù„Ù…ÙˆØ±Ø¯"),
+        "customer": ("customer", "client", "bill to", "ship to", "acheteur", "livre a", "livrÃ© a", "Ø§Ù„Ø¹Ù…ÙŠÙ„"),
     }
     for role, role_labels in labels.items():
         for index, block in enumerate(ordered):
@@ -691,7 +783,7 @@ def _document_number_from_line(line: str) -> str | None:
 def _find_first_client_line(lines: list[str]) -> int | None:
     for index, line in enumerate(lines):
         plain = strip_accents(line).lower()
-        if any(marker in plain for marker in ("client", "customer", "livre a", "livrÃƒÂ© a", "livre ÃƒÂ ", "Ø§Ù„Ø¹Ù…ÙŠÙ„")):
+        if any(marker in plain for marker in ("client", "customer", "livre a", "livrÃƒÆ’Ã‚Â© a", "livre ÃƒÆ’Ã‚Â ", "Ã˜Â§Ã™â€žÃ˜Â¹Ã™â€¦Ã™Å Ã™â€ž")):
             return index
     return None
 
@@ -708,7 +800,7 @@ def _is_party_label(plain: str) -> bool:
     normalized = plain.strip().rstrip(":")
     return any(
         label == normalized or normalized.startswith(f"{label}:")
-        for label in ("seller", "supplier", "vendor", "from", "bill from", "fournisseur", "vendeur", "client", "customer", "bill to", "billed to", "ship to", "acheteur", "livre a", "livre Ã ")
+        for label in ("seller", "supplier", "vendor", "from", "bill from", "fournisseur", "vendeur", "client", "customer", "bill to", "billed to", "ship to", "acheteur", "livre a", "livre ÃƒÂ ")
     )
 
 
@@ -731,7 +823,7 @@ def _looks_like_address_line(line: str) -> bool:
 
 
 def _is_invoice_date_label(label: str) -> bool:
-    return any(key in label for key in ("date of issue", "invoice date", "date facture", "date d'emission", "date d emission", "ØªØ§Ø±ÙŠØ®")) or label == "date"
+    return any(key in label for key in ("date of issue", "invoice date", "date facture", "date d'emission", "date d emission", "Ã˜ÂªÃ˜Â§Ã˜Â±Ã™Å Ã˜Â®")) or label == "date"
 
 
 def _money_values(text: str) -> list[float]:
@@ -741,10 +833,3 @@ def _money_values(text: str) -> list[float]:
         if value is not None:
             values.append(value)
     return values
-
-
-
-
-
-
-
