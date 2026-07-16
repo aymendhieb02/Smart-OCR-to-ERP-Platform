@@ -1,0 +1,29 @@
+{
+  "filename": "07_test-00000-of-00001-af2d92d1cee28514_000000.png",
+  "source_path": "D:\\Stage_mr_f\\sources\\datasets\\invoices-and-receipts_ocr_v1\\invoices-and-receipts_ocr_v1\\data\\exported\\images\\test-00000-of-00001-af2d92d1cee28514_000000.png",
+  "document_type": null,
+  "supplier_name": null,
+  "customer_name": null,
+  "invoice_number": null,
+  "invoice_date": null,
+  "due_date": null,
+  "currency": null,
+  "amount_ht": null,
+  "tax_amount": null,
+  "amount_ttc": null,
+  "tax_rate": null,
+  "line_items": [
+    {
+      "reference": null,
+      "description": null,
+      "quantity": null,
+      "unit": null,
+      "unit_price": null,
+      "tax_rate": null,
+      "line_total_ht": null,
+      "line_total_ttc": null
+    }
+  ],
+  "notes": "",
+  "verified_by_human": false
+}

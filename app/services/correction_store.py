@@ -13,10 +13,20 @@ from app.core.schemas import (
     CorrectionSubmission,
     ExtractedInvoiceFields,
     LineItem,
+    ReviewCorrectionResponse,
+    ReviewCorrectionSubmission,
     ValidationResult,
 )
+from app.services.confidence_engine import calculate_confidence
+from app.services.correction_suggestions import suggest_corrections
+from app.services.duplicate_detector import detect_duplicates
 from app.services.erp_mapper import build_erp_json
+from app.services.erp_readiness import assess_erp_readiness
 from app.services.extraction_quality import apply_extraction_quality_gate, build_validated_erp_json
+from app.services.financial_reasoner import reason_financials
+from app.services.fraud_indicators import detect_fraud_indicators
+from app.services.invoice_validation_report import build_invoice_validation_report
+from app.services.row_validation_engine import summarize_rows, validate_rows
 from app.services.validator import validate_invoice
 
 CORRECTION_DIR = settings.output_dir / "corrections"
@@ -70,6 +80,167 @@ def submit_corrections(payload: CorrectionSubmission) -> CorrectionResponse:
     )
 
 
+def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCorrectionResponse:
+    """Apply human review edits, preserve evidence, and rerun business validation."""
+    document_id = payload.document_id or str(uuid.uuid4())
+    fields = _review_base_fields(payload)
+    source_file = payload.source_file or _payload_source_file(payload) or "manual-review"
+    original_evidence = _collect_original_evidence(payload)
+    records: list[CorrectionItem] = []
+
+    for field_name, correction in payload.field_corrections.items():
+        value, original_value, metadata = _normalize_field_correction(correction, fields, field_name, original_evidence)
+        if hasattr(fields, field_name):
+            setattr(fields, field_name, value)
+        records.append(CorrectionItem(
+            document_id=document_id,
+            field_name=field_name,
+            original_value=original_value,
+            corrected_value=value,
+            original_bbox=metadata.get("bbox"),
+            page=metadata.get("page"),
+            confidence=metadata.get("confidence"),
+            source_file=source_file,
+            source=metadata.get("source", "human"),
+            correction_type=FIELD_TYPES.get(field_name, "field"),
+            user_action=metadata.get("user_action", "edited"),
+        ))
+
+    if payload.line_item_corrections:
+        fields.line_items = _review_line_items(payload.line_item_corrections, payload.ignored_rows)
+        _recompute_amounts_from_line_items(fields)
+        for index, item in enumerate(fields.line_items):
+            records.append(CorrectionItem(
+                document_id=document_id,
+                field_name=f"line_items[{index}]",
+                original_value=None,
+                corrected_value=item.model_dump(mode="json"),
+                original_bbox=item.bbox,
+                page=item.page,
+                confidence=item.confidence,
+                source_file=source_file,
+                source=item.source or "human",
+                correction_type="line_item",
+                user_action="edited",
+                line_item_index=index,
+            ))
+    for ignored in payload.ignored_rows:
+        records.append(CorrectionItem(
+            document_id=document_id,
+            field_name=f"line_items[{ignored}]",
+            original_value=None,
+            corrected_value=None,
+            source_file=source_file,
+            correction_type="line_item",
+            user_action="rejected",
+        ))
+
+    validation = validate_invoice(fields, None, "invoice")
+    row_validation = validate_rows(fields.line_items)
+    row_summary = summarize_rows(row_validation)
+    financial = reason_financials(fields, fields.line_items, document_type="invoice")
+    if financial["financial_errors"]:
+        validation.errors.extend(financial["financial_errors"])
+    validation.warnings.extend(financial["financial_warnings"])
+
+    base_confidence = _review_source_confidence(payload)
+    confidence = calculate_confidence(
+        ocr=base_confidence.get("ocr"),
+        layout=base_confidence.get("layout"),
+        table=base_confidence.get("table"),
+        fields=1.0 if records else base_confidence.get("fields"),
+        financial=financial["financial_consistency_score"],
+        validation=row_summary["validation_score"],
+    )
+    readiness = assess_erp_readiness(fields, row_summary=row_summary, financial=financial, confidence=confidence["overall_confidence"])
+    confidence = calculate_confidence(
+        ocr=base_confidence.get("ocr"),
+        layout=base_confidence.get("layout"),
+        table=base_confidence.get("table"),
+        fields=1.0 if records else base_confidence.get("fields"),
+        financial=financial["financial_consistency_score"],
+        validation=row_summary["validation_score"],
+        erp=readiness["erp_ready_score"],
+    )
+    if readiness["erp_ready_status"] == "Rejected":
+        validation.status = "invalid"
+        validation.is_valid = False
+    elif readiness["erp_ready_status"] == "Needs Review":
+        validation.status = "needs_review"
+        validation.is_valid = False
+    elif not validation.errors:
+        validation.status = "valid"
+        validation.is_valid = True
+
+    duplicate = detect_duplicates(fields)
+    fraud = detect_fraud_indicators(fields, financial=financial, duplicate=duplicate, validation={"missing_fields": readiness["missing_fields"]})
+    suggestions = suggest_corrections(fields)
+    report = build_invoice_validation_report(
+        fields=fields,
+        rows=row_validation,
+        financial=financial,
+        confidence=confidence,
+        readiness=readiness,
+        warnings=validation.warnings,
+        errors=validation.errors,
+        corrections=suggestions,
+        duplicate=duplicate,
+        fraud=fraud,
+    )
+    erp_json = build_erp_json(
+        fields=fields,
+        validation=validation,
+        source_file=source_file,
+        ocr_engine="human-review",
+        confidence=confidence["overall_confidence"],
+        document_type="invoice",
+        field_confidences={field: 1.0 for field in payload.field_corrections},
+        expanded_fields={},
+    )
+    erp_json.quality.update({
+        "overall_confidence": confidence["overall_confidence"],
+        "confidence_breakdown": confidence,
+        "erp_readiness": readiness,
+        "financial_reasoning": financial,
+        "fraud_indicators": fraud,
+        "correction_metadata": {
+            "corrected_by": "human",
+            "correction_count": len(records),
+            "original_evidence_preserved": True,
+        },
+    })
+    validated_erp_json = build_validated_erp_json(erp_json, {
+        "extraction_status": validation.status,
+        "blocking_errors": readiness["blocking_errors"],
+        "warnings": validation.warnings,
+    })
+    validated_erp_json["erp_readiness"] = readiness
+    validated_erp_json["erp_export_allowed"] = readiness["ready"]
+    append_correction_records(records)
+    return ReviewCorrectionResponse(
+        document_id=document_id,
+        corrected_fields=fields,
+        corrected_line_items=fields.line_items,
+        corrections=records,
+        validation=validation,
+        erp_json=erp_json.model_dump(mode="json"),
+        validated_erp_json=validated_erp_json,
+        invoice_validation_report=report,
+        row_validation=row_validation,
+        financial_reasoning=financial,
+        confidence_breakdown=confidence,
+        erp_readiness=readiness,
+        correction_metadata={
+            "corrected_by": "human",
+            "correction_count": len(records),
+            "ignored_rows": payload.ignored_rows,
+            "original_evidence_preserved": True,
+        },
+        original_evidence=original_evidence,
+        erp_export_allowed=readiness["ready"],
+    )
+
+
 def build_correction_records(payload: CorrectionSubmission, document_id: str) -> list[CorrectionItem]:
     records: list[CorrectionItem] = []
     original_fields = payload.detected_fields or ExtractedInvoiceFields()
@@ -107,6 +278,121 @@ def build_correction_records(payload: CorrectionSubmission, document_id: str) ->
     return records
 
 
+def _review_base_fields(payload: ReviewCorrectionSubmission) -> ExtractedInvoiceFields:
+    if payload.detected_fields is not None:
+        return payload.detected_fields.model_copy(deep=True)
+    detected = (payload.original_payload or {}).get("detected_fields")
+    if isinstance(detected, dict):
+        return ExtractedInvoiceFields.model_validate(detected)
+    return ExtractedInvoiceFields()
+
+
+def _payload_source_file(payload: ReviewCorrectionSubmission) -> str | None:
+    original = payload.original_payload or {}
+    return (
+        original.get("erp_json", {}).get("metadata", {}).get("source_file")
+        or original.get("document_preview", {}).get("source_file")
+    )
+
+
+def _collect_original_evidence(payload: ReviewCorrectionSubmission) -> dict[str, Any]:
+    original = payload.original_payload or {}
+    evidence: dict[str, Any] = {}
+    for field_name, detail in (original.get("expanded_fields") or {}).items():
+        if isinstance(detail, dict):
+            evidence[field_name] = {
+                "value": detail.get("value"),
+                "bbox": detail.get("bbox"),
+                "page": detail.get("page"),
+                "confidence": detail.get("confidence"),
+                "source": detail.get("source"),
+            }
+    return evidence
+
+
+def _normalize_field_correction(
+    correction: Any,
+    fields: ExtractedInvoiceFields,
+    field_name: str,
+    original_evidence: dict[str, Any],
+) -> tuple[Any, Any, dict[str, Any]]:
+    if isinstance(correction, dict):
+        value = correction.get("value", correction.get("corrected_value"))
+        original_value = correction.get("original_value", getattr(fields, field_name, None))
+        metadata = dict(correction)
+    else:
+        value = correction
+        original_value = getattr(fields, field_name, None)
+        metadata = {"source": "human"}
+    evidence = original_evidence.get(field_name, {})
+    metadata.setdefault("bbox", evidence.get("bbox"))
+    metadata.setdefault("page", evidence.get("page"))
+    metadata.setdefault("confidence", evidence.get("confidence"))
+    metadata.setdefault("source", "human")
+    return value, original_value, metadata
+
+
+def _review_line_items(raw_items: list[dict[str, Any]], ignored_rows: list[Any]) -> list[LineItem]:
+    ignored = {str(item) for item in ignored_rows}
+    line_items: list[LineItem] = []
+    for index, raw in enumerate(raw_items):
+        row_key = str(raw.get("row_key") or raw.get("key") or index)
+        if row_key in ignored or str(index) in ignored or str(index + 1) in ignored:
+            continue
+        values = raw.get("values") if isinstance(raw.get("values"), dict) else raw
+        item_payload = {
+            "reference": values.get("reference"),
+            "description": values.get("description"),
+            "quantity": _float_or_none(values.get("quantity")),
+            "unit": values.get("unit"),
+            "unit_price": _float_or_none(values.get("unit_price")),
+            "discount": _float_or_none(values.get("discount")),
+            "line_total_ht": _float_or_none(values.get("line_total_ht", values.get("amount_ht"))),
+            "tax_amount": _float_or_none(values.get("tax_amount")),
+            "tax_rate": _float_or_none(values.get("tax_rate")),
+            "line_total_ttc": _float_or_none(values.get("line_total_ttc", values.get("amount_ttc"))),
+            "total": _float_or_none(values.get("total", values.get("amount_ttc"))),
+            "confidence": _float_or_none(values.get("confidence")) or _float_or_none(raw.get("confidence")) or 1.0,
+            "bbox": raw.get("bbox"),
+            "page": _int_or_none(raw.get("page") or values.get("page")),
+            "source": raw.get("source") or values.get("source") or "human correction",
+        }
+        line_items.append(LineItem(**item_payload))
+    return line_items
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    normalized = str(value).strip().replace(" ", "").replace(",", ".")
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _review_source_confidence(payload: ReviewCorrectionSubmission) -> dict[str, float | None]:
+    original = payload.original_payload or {}
+    confidence = original.get("confidence_breakdown") or original.get("erp_json", {}).get("quality", {}).get("confidence_breakdown", {})
+    return {
+        "ocr": confidence.get("ocr_confidence", original.get("erp_json", {}).get("metadata", {}).get("confidence")),
+        "layout": confidence.get("layout_confidence"),
+        "table": confidence.get("table_confidence"),
+        "fields": confidence.get("field_confidence"),
+    }
+
+
 def append_correction_records(records: list[CorrectionItem]) -> None:
     if not records:
         return
@@ -132,20 +418,30 @@ def load_correction_records() -> list[dict[str, Any]]:
     return records
 
 
-def get_correction_memory() -> dict[str, Any]:
+def get_correction_memory(*, tenant_id: str = "default", document_family: str | None = None, supplier_identity: str | None = None) -> dict[str, Any]:
     records = load_correction_records()
     memory: dict[str, Any] = {
         "known_supplier_names": [],
         "known_customer_names": [],
         "common_item_descriptions": [],
         "common_field_labels": [],
-        "record_count": len(records),
+        "record_count": 0,
+        "tenant_id": tenant_id,
+        "document_family": document_family,
+        "supplier_identity": supplier_identity,
     }
     suppliers: Counter[str] = Counter()
     customers: Counter[str] = Counter()
     items: Counter[str] = Counter()
     labels: Counter[str] = Counter()
     for record in records:
+        if (record.get("tenant_id") or "default") != tenant_id:
+            continue
+        if document_family and record.get("document_family") not in {None, document_family}:
+            continue
+        if supplier_identity and record.get("supplier_identity") not in {None, supplier_identity}:
+            continue
+        memory["record_count"] += 1
         action = record.get("user_action", "edited")
         if action not in {"accepted", "edited"}:
             continue
@@ -169,8 +465,15 @@ def get_correction_memory() -> dict[str, Any]:
     return memory
 
 
-def boost_candidates_from_memory(candidates: dict[str, list[Any]], text: str | None = None) -> None:
-    memory = get_correction_memory()
+def boost_candidates_from_memory(
+    candidates: dict[str, list[Any]],
+    text: str | None = None,
+    *,
+    tenant_id: str = "default",
+    document_family: str | None = None,
+    supplier_identity: str | None = None,
+) -> None:
+    memory = get_correction_memory(tenant_id=tenant_id, document_family=document_family, supplier_identity=supplier_identity)
     known_by_field = {
         "supplier_name": set(memory.get("known_supplier_names", [])),
         "customer_name": set(memory.get("known_customer_names", [])),
@@ -185,7 +488,12 @@ def boost_candidates_from_memory(candidates: dict[str, list[Any]], text: str | N
         lowered = text.lower()
         for field_name, known_values in known_by_field.items():
             for value in known_values:
-                if value and value.lower() in lowered and not any(str(candidate.value) == value for candidate in candidates.get(field_name, [])):
+                if (
+                    value
+                    and value.lower() in lowered
+                    and _memory_text_context_allows(field_name, value, text)
+                    and not any(str(candidate.value) == value for candidate in candidates.get(field_name, []))
+                ):
                     from app.core.schemas import Candidate
                     candidates.setdefault(field_name, []).append(Candidate(
                         field=field_name,
@@ -197,6 +505,23 @@ def boost_candidates_from_memory(candidates: dict[str, list[Any]], text: str | N
                         evidence_text=value,
                         score_breakdown={"memory_score": 0.35, "business_score": 0.25, "layout_score": 0.10, "label_score": 0.05, "regex_score": 0.03},
                     ))
+
+
+def _memory_text_context_allows(field_name: str, value: str, text: str | None) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    value_index = lowered.find(value.lower())
+    if value_index < 0:
+        return False
+    window = lowered[max(0, value_index - 160): value_index + len(value) + 160]
+    if any(marker in window for marker in ("description", "qty", "quantity", "price", "total", "iban", "swift", "footer")):
+        return False
+    if field_name == "supplier_name":
+        return any(marker in window for marker in ("seller", "supplier", "vendor", "from", "fournisseur"))
+    if field_name == "customer_name":
+        return any(marker in window for marker in ("client", "customer", "bill to", "acheteur"))
+    return False
 
 
 def _apply_payload_corrections(payload: CorrectionSubmission) -> ExtractedInvoiceFields:

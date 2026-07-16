@@ -21,6 +21,9 @@ class LineItem(BaseModel):
     confidence: float | None = None
     bbox: Any = None
     page: int | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
     source: str | None = None
 
 class CorrectionMetadata(BaseModel):
@@ -112,7 +115,11 @@ class OCRLine(BaseModel):
     confidence: float | None = None
     page_number: int
     bbox: BoundingBox | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
     line_index: int | None = None
+    source: str | None = None
 
 
 class OCRResult(BaseModel):
@@ -137,6 +144,9 @@ class Candidate(BaseModel):
     page: int | None = None
     line_index: int | None = None
     bbox: BoundingBox | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
     normalized_value: Any = None
     confidence: float | None = None
     rejected: bool = False
@@ -150,6 +160,9 @@ class FieldExtractionDetail(BaseModel):
     confidence: float | None = None
     bbox: BoundingBox | None = None
     page: int | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
     line_index: int | None = None
     source: str | None = None
     normalized_value: Any = None
@@ -165,6 +178,9 @@ class LayoutBlock(BaseModel):
     text: str = ""
     fields: list[str] = Field(default_factory=list)
     page: int = 1
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
 
 
 class FieldBox(BaseModel):
@@ -173,6 +189,9 @@ class FieldBox(BaseModel):
     confidence: float | None = None
     bbox: BoundingBox | None = None
     page: int | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    coordinate_space: str | None = None
     source: str | None = None
 
 
@@ -218,6 +237,10 @@ class ExtractedInvoiceFields(BaseModel):
 
 class CorrectionItem(BaseModel):
     document_id: str | None = None
+    tenant_id: str = "default"
+    organization_id: str | None = None
+    document_family: str | None = None
+    supplier_identity: str | None = None
     field_name: str
     original_value: Any = None
     corrected_value: Any = None
@@ -250,6 +273,34 @@ class CorrectionResponse(BaseModel):
     validation: ValidationResult
     validated_erp_json: dict[str, Any]
     memory_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewCorrectionSubmission(BaseModel):
+    document_id: str | None = None
+    source_file: str | None = None
+    detected_fields: ExtractedInvoiceFields | None = None
+    original_payload: dict[str, Any] | None = None
+    field_corrections: dict[str, Any] = Field(default_factory=dict)
+    line_item_corrections: list[dict[str, Any]] = Field(default_factory=list)
+    ignored_rows: list[Any] = Field(default_factory=list)
+
+
+class ReviewCorrectionResponse(BaseModel):
+    document_id: str
+    corrected_fields: ExtractedInvoiceFields
+    corrected_line_items: list[LineItem] = Field(default_factory=list)
+    corrections: list[CorrectionItem] = Field(default_factory=list)
+    validation: ValidationResult
+    erp_json: dict[str, Any]
+    validated_erp_json: dict[str, Any]
+    invoice_validation_report: dict[str, Any] = Field(default_factory=dict)
+    row_validation: list[dict[str, Any]] = Field(default_factory=list)
+    financial_reasoning: dict[str, Any] = Field(default_factory=dict)
+    confidence_breakdown: dict[str, Any] = Field(default_factory=dict)
+    erp_readiness: dict[str, Any] = Field(default_factory=dict)
+    correction_metadata: dict[str, Any] = Field(default_factory=dict)
+    original_evidence: dict[str, Any] = Field(default_factory=dict)
+    erp_export_allowed: bool = False
 
 class SupplierERP(BaseModel):
     name: str | None = None
@@ -338,4 +389,13 @@ class ProcessInvoiceResponse(BaseModel):
     table_candidates: list[dict[str, Any]] = Field(default_factory=list)
     line_items_validated: list[LineItem] = Field(default_factory=list)
     line_items_needs_review: list[LineItem] = Field(default_factory=list)
+    all_line_items: list[LineItem] = Field(default_factory=list)
     validation_report: dict[str, Any] = Field(default_factory=dict)
+    row_validation: list[dict[str, Any]] = Field(default_factory=list)
+    financial_reasoning: dict[str, Any] = Field(default_factory=dict)
+    confidence_breakdown: dict[str, Any] = Field(default_factory=dict)
+    erp_readiness: dict[str, Any] = Field(default_factory=dict)
+    invoice_validation_report: dict[str, Any] = Field(default_factory=dict)
+    correction_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    duplicate_detection: dict[str, Any] = Field(default_factory=dict)
+    fraud_indicators: dict[str, Any] = Field(default_factory=dict)

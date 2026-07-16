@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.core.schemas import DocumentClassification, ExtractedInvoiceFields, OCRResult, ValidationResult
 
 
-REASONABLE_TAX_RATES = {0, 7, 13, 19, 20}
+REASONABLE_TAX_RATES = {0, 7, 10, 13, 19, 20}
 
 
 def validate_invoice(

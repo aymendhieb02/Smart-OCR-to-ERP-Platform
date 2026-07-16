@@ -1,11 +1,11 @@
-# Tiered Evaluation Guide
+﻿# Tiered Evaluation Guide
 
 This project should not process all 8,000+ documents during normal development. Use the tiered evaluator in `scripts/evaluate_dataset.py` and keep the default mode as `smoke`.
 
 Dataset root:
 
 ```powershell
-D:\Stage_mr_f\sources
+D:\Stage_udgroup\sources
 ```
 
 Expected folders:
@@ -143,3 +143,4 @@ The evaluator reports:
 3. Run `fail-fast` when debugging crashes.
 4. Run `cached` when OCR has already been computed and you only changed extraction or validation logic.
 5. Run `full --resume` overnight only.
+

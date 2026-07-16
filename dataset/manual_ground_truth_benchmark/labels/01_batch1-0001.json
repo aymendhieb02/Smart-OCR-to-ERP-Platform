@@ -1,0 +1,29 @@
+{
+  "filename": "01_batch1-0001.jpg",
+  "source_path": "D:\\Stage_mr_f\\sources\\datasets\\high-quality-invoice-images-for-ocr\\batch_1\\batch_1\\batch1_1\\batch1-0001.jpg",
+  "document_type": null,
+  "supplier_name": null,
+  "customer_name": null,
+  "invoice_number": null,
+  "invoice_date": null,
+  "due_date": null,
+  "currency": null,
+  "amount_ht": null,
+  "tax_amount": null,
+  "amount_ttc": null,
+  "tax_rate": null,
+  "line_items": [
+    {
+      "reference": null,
+      "description": null,
+      "quantity": null,
+      "unit": null,
+      "unit_price": null,
+      "tax_rate": null,
+      "line_total_ht": null,
+      "line_total_ttc": null
+    }
+  ],
+  "notes": "",
+  "verified_by_human": false
+}

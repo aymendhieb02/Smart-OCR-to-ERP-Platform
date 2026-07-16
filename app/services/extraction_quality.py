@@ -29,7 +29,7 @@ BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{18,}$")
 SHORT_FRAGMENT = re.compile(r"^[A-Za-z]{1,3}$")
 INVOICE_REF_PATTERN = re.compile(r"^(?=.*\d)[A-Z0-9][A-Z0-9_./\-]{3,}$", re.IGNORECASE)
 TAX_ID_PATTERN = re.compile(r"(?=.*\d)[A-Z0-9/.-]{5,}$", re.IGNORECASE)
-REASONABLE_TAX_RATES = {0, 7, 13, 19, 20}
+REASONABLE_TAX_RATES = {0, 7, 10, 13, 19, 20}
 
 
 @dataclass
@@ -76,8 +76,10 @@ def apply_extraction_quality_gate(
 
     totals_report = validate_totals(sanitized, sanitized)
     if not totals_report["accepted"]:
-        for field_name in ("amount_ht", "tva_amount", "amount_ttc", "tax_rate"):
-            setattr(sanitized, field_name, None)
+        field_report["financial_gate_results"] = [
+            _financial_gate_result(field_name, getattr(sanitized, field_name, None), totals_report)
+            for field_name in ("amount_ht", "tva_amount", "amount_ttc", "tax_rate")
+        ]
         field_report["totals_consistency"] = totals_report
 
     valid_lines, review_lines, line_report = validate_line_items(fields.line_items)
@@ -196,6 +198,17 @@ def validate_line_items(items: list[LineItem]) -> tuple[list[LineItem], list[Lin
     return valid, review, report
 
 
+def _financial_gate_result(field_name: str, value: Any, totals_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field": field_name,
+        "before": value,
+        "after": value,
+        "status": "needs_review" if value is not None else "missing",
+        "reason": totals_report.get("reason"),
+        "preserved_as_review_candidate": value is not None,
+    }
+
+
 def build_validated_erp_json(erp_json: ERPInvoiceJSON, validation_report: dict[str, Any]) -> dict[str, Any]:
     payload = deepcopy(erp_json.model_dump(mode="json"))
     payload["extraction_status"] = validation_report.get("extraction_status", erp_json.validation_status)
@@ -293,6 +306,8 @@ def _line_total_sum(line_items: list[LineItem]) -> float | None:
     return round(sum(totals), 3)
 def _validate_line_item(item: LineItem) -> tuple[bool, list[str]]:
     reasons: list[str] = []
+    if "review" in (item.source or "").lower():
+        reasons.append("table reconstruction is low-confidence and requires review")
     description = (item.description or "").strip()
     if len(description) < 3 or sum(char.isalpha() for char in description) < 3:
         reasons.append("missing or weak description")

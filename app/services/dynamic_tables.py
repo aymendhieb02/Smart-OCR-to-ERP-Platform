@@ -183,6 +183,7 @@ def _line_items_table(fields: ExtractedInvoiceFields) -> DynamicTable:
             "source": item.source or "line item extraction",
             "page": item.page,
         }
+        row_status = "needs_review" if "review" in (item.source or "").lower() else "validated"
         rows.append(DynamicTableRow(
             key=f"line_item_{index}",
             label=f"Line {index}",
@@ -190,7 +191,7 @@ def _line_items_table(fields: ExtractedInvoiceFields) -> DynamicTable:
             source="line item extraction",
             included_in_erp=True,
             editable=True,
-            status="ok",
+            status=row_status,
             correction=CorrectionMetadata(original_value=values),
         ))
     return DynamicTable(

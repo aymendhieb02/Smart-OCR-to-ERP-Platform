@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     ocr_languages: str = "fr,en"
     ocr_languages_list: list[str] = ["fr", "en", "ar"]
     enable_tesseract_fallback: bool = True
+    ocr_mode: str = "balanced"
+    enable_ocr_disk_cache: bool = True
+    ocr_cache_dir: Path = Path(".cache/ocr")
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="INVOICE_OCR_")
 

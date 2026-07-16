@@ -45,6 +45,8 @@ def build_erp_json(
         line_items=fields.line_items,
         quality={
             "overall_confidence": confidence,
+            "confidence_type": "uncalibrated_composite_index",
+            "confidence_display_name": "Composite Confidence Index",
             "field_confidences": field_confidences or {},
             "needs_human_review": validation.status != "valid",
             "languages": languages or ["fr", "en", "ar"],

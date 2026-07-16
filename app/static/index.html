@@ -4,20 +4,38 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Invoice OCR ERP Review</title>
-  <link rel="stylesheet" href="/static/styles.css?v=editable-camera-20260708">
+  <link rel="stylesheet" href="/static/styles.css?v=final-polish-20260715">
 </head>
 <body>
   <main class="app">
     <section class="hero">
       <div>
-        <p class="eyebrow">OCR to ERP review console</p>
-        <h1>Document extraction review</h1>
-        <p class="subtitle">Upload an invoice, delivery note, receipt, or purchase order and review the same API output used by Swagger.</p>
+        <p class="eyebrow">OCR to ERP human review</p>
+        <h1>Document review workspace</h1>
+        <p class="subtitle">Upload an invoice, delivery note, receipt, or purchase order, verify the visual evidence, correct uncertain values, and export only ERP-ready JSON.</p>
       </div>
       <div class="status-card">
         <span class="label">API</span>
         <strong id="apiStatus">Checking...</strong>
       </div>
+    </section>
+
+    <section class="landing-summary" aria-label="Project summary">
+      <article>
+        <span class="label">Pipeline coverage</span>
+        <strong>OCR + layout + tables + validation</strong>
+        <p>One review workspace connects preview overlays, editable fields, line rows, financial checks, and ERP readiness.</p>
+      </article>
+      <article>
+        <span class="label">Safety rule</span>
+        <strong>No silent ERP export</strong>
+        <p>Documents with missing, conflicting, or low-confidence values stay in review until corrected.</p>
+      </article>
+      <article>
+        <span class="label">Benchmark note</span>
+        <strong>Confidence is not accuracy</strong>
+        <p>True accuracy requires manually verified ground truth; the composite index only describes extraction certainty.</p>
+      </article>
     </section>
 
     <section class="upload-panel">
@@ -31,6 +49,19 @@
         <button id="cameraBtn" class="ghost" type="button">Camera</button>
       </div>
       <div id="fileName" class="file-name">No file selected</div>
+    </section>
+
+    <section class="demo-panel" aria-label="Demo documents">
+      <div>
+        <p class="eyebrow">Demo mode</p>
+        <h2>Load a prepared document</h2>
+        <p class="panel-subtitle">These documents run through the normal OCR pipeline and are useful for a stable presentation.</p>
+      </div>
+      <div class="demo-actions">
+        <button class="ghost demo-button" type="button" data-demo-id="good">Load good invoice</button>
+        <button class="ghost demo-button" type="button" data-demo-id="review">Load review invoice</button>
+        <button class="ghost demo-button" type="button" data-demo-id="noisy">Load noisy document</button>
+      </div>
     </section>
 
     <section id="loading" class="loading hidden">
@@ -51,7 +82,7 @@
           <strong id="documentType">-</strong>
         </article>
         <article class="summary-card">
-          <span class="label">OCR confidence</span>
+          <span class="label">Composite Confidence Index</span>
           <strong id="ocrConfidence">-</strong>
         </article>
         <article class="summary-card">
@@ -60,10 +91,22 @@
         </article>
       </div>
 
+      <section class="status-guide" aria-label="Status guide">
+        <article><strong>[OK] Validated</strong><span>Required values are present and business checks passed.</span></article>
+        <article><strong>[!] Needs review</strong><span>Some values are uncertain or incomplete; confirm them before export.</span></article>
+        <article><strong>[X] Invalid</strong><span>A blocking issue prevents ERP insertion.</span></article>
+        <article><strong>[EDIT] Manually corrected</strong><span>A reviewer changed or accepted a value and validation should be re-run.</span></article>
+      </section>
+
       <section class="panel visual-review">
         <div class="panel-head">
           <h2>Visual review</h2>
           <div class="review-actions">
+            <div class="page-controls" aria-label="Preview page controls">
+              <button class="ghost small" id="prevPageBtn" type="button">Prev</button>
+              <span id="pageIndicator" class="page-indicator">Page - / -</span>
+              <button class="ghost small" id="nextPageBtn" type="button">Next</button>
+            </div>
             <div class="zoom-controls" aria-label="Preview zoom controls">
               <button class="ghost small" id="zoomOutBtn" type="button">-</button>
               <button class="ghost small" id="zoomInBtn" type="button">+</button>
@@ -74,6 +117,7 @@
               <label><input type="checkbox" id="toggleOcr" checked> OCR boxes</label>
               <label><input type="checkbox" id="toggleLayout" checked> Layout blocks</label>
               <label><input type="checkbox" id="toggleFields" checked> Field boxes</label>
+              <label><input type="checkbox" id="toggleRows" checked> Line rows</label>
               <label><input type="checkbox" id="toggleLabels" checked> Confidence labels</label>
             </div>
           </div>
@@ -93,6 +137,12 @@
               <strong>No region selected</strong>
               <p>Click any OCR, layout, or field box to inspect it.</p>
             </section>
+            <section id="erpReadinessPanel" class="inspector-card readiness-card">
+              <span class="label">ERP readiness</span>
+              <strong>Waiting for document</strong>
+              <p>Process a file to see ERP export status.</p>
+              <button id="erpExportBtn" class="export-button" type="button" disabled>Export ERP JSON</button>
+            </section>
             <section class="inspector-card">
               <span class="label">Overlay legend</span>
               <div class="legend">
@@ -100,6 +150,7 @@
                 <span><i class="legend-customer"></i>Customer</span>
                 <span><i class="legend-products"></i>Products</span>
                 <span><i class="legend-totals"></i>Totals</span>
+                <span><i class="legend-row"></i>Line row</span>
                 <span><i class="legend-field"></i>Field</span>
                 <span><i class="legend-ocr"></i>OCR</span>
               </div>
@@ -119,6 +170,8 @@
             <select id="dynamicFilter">
               <option value="all">All</option>
               <option value="erp">ERP only</option>
+              <option value="validated">Validated</option>
+              <option value="needs_review">Needs review</option>
               <option value="missing">Missing</option>
               <option value="low_confidence">Low confidence</option>
               <option value="unmapped">Unmapped</option>
@@ -131,8 +184,15 @@
           <button class="dynamic-tab" type="button" data-dynamic-tab="erp_fields">ERP Fields</button>
           <button class="dynamic-tab" type="button" data-dynamic-tab="all_extracted_fields">All Extracted Data</button>
           <button class="dynamic-tab" type="button" data-dynamic-tab="line_items">Product Lines</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="financial_checks">Financial Checks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="correction_suggestions">Suggestions</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="duplicate_fraud">Duplicate / Risk</button>
+          <span class="advanced-label">Advanced</span>
           <button class="dynamic-tab" type="button" data-dynamic-tab="ocr_blocks">OCR Blocks</button>
           <button class="dynamic-tab" type="button" data-dynamic-tab="layout_blocks">Layout Blocks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="unmapped_text">Unmapped Text</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="validation_report">Validation Report</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_json">ERP JSON</button>
           <button class="dynamic-tab" type="button" data-dynamic-tab="raw_json">Raw JSON</button>
         </div>
         <div id="dynamicTableHost" class="dynamic-table-host"></div>
@@ -202,6 +262,6 @@
         </div>
       </div>
     </section>
-  <script src="/static/app.js?v=editable-camera-20260708"></script>
+  <script src="/static/app.js?v=final-polish-20260715"></script>
 </body>
 </html>

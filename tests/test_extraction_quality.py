@@ -31,11 +31,35 @@ def test_quality_gate_rejects_bad_field_values_from_failing_batch_example():
     assert result.sanitized_fields.customer_name is None
     assert result.sanitized_fields.invoice_number is None
     assert result.sanitized_fields.purchase_order_number is None
-    assert result.sanitized_fields.amount_ht is None
-    assert result.sanitized_fields.tva_amount is None
-    assert result.sanitized_fields.amount_ttc is None
+    assert result.sanitized_fields.amount_ht == 100.0
+    assert result.sanitized_fields.tva_amount == 12.0
+    assert result.sanitized_fields.amount_ttc == 140.0
+    assert result.validation_report["fields"]["financial_gate_results"][0]["preserved_as_review_candidate"] is True
     assert result.sanitized_fields.line_items == []
     assert len(result.line_items_needs_review) == 2
     assert result.validation_report["extraction_status"] == "needs_review"
     assert result.rejected_candidates["supplier_name"]
     assert result.rejected_candidates["customer_name"]
+
+
+def test_quality_gate_preserves_correct_totals_when_only_ttc_is_inconsistent():
+    fields = ExtractedInvoiceFields(
+        supplier_name="ACME Ltd",
+        invoice_number="INV-100",
+        amount_ht=100.0,
+        tva_amount=20.0,
+        amount_ttc=130.0,
+        tax_rate=20.0,
+    )
+    candidates = {
+        "amount_ht": [Candidate(field="amount_ht", value=100.0, score=0.92, source="totals block")],
+        "tva_amount": [Candidate(field="tva_amount", value=20.0, score=0.91, source="totals block")],
+        "amount_ttc": [Candidate(field="amount_ttc", value=130.0, score=0.9, source="totals block")],
+    }
+    result = apply_extraction_quality_gate(fields, candidates, {key: 0.9 for key in candidates})
+
+    assert result.sanitized_fields.amount_ht == 100.0
+    assert result.sanitized_fields.tva_amount == 20.0
+    assert result.sanitized_fields.amount_ttc == 130.0
+    assert result.validation_report["extraction_status"] == "needs_review"
+    assert result.validation_report["fields"]["financial_gate_results"][2]["field"] == "amount_ttc"

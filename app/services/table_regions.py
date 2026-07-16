@@ -8,18 +8,31 @@ import numpy as np
 class OCRRegion:
     name: str
     image: np.ndarray
+    x_offset: int = 0
+    y_offset: int = 0
+    coordinates: tuple[int, int, int, int] | None = None
 
 
 def build_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     """Return high-value invoice zones for a second OCR pass."""
     h, w = image.shape[:2]
     regions = [
-        OCRRegion("full_page", image),
-        OCRRegion("line_items_table_area", _crop(image, 0.03, 0.36, 0.97, 0.62)),
-        OCRRegion("totals_bottom_right", _crop(image, 0.52, 0.58, 0.97, 0.78)),
-        OCRRegion("totals_and_payment_area", _crop(image, 0.45, 0.55, 0.98, 0.82)),
+        OCRRegion("full_page", image, 0, 0, (0, 0, w, h)),
+        _region(image, "header_parties", 0.00, 0.00, 1.00, 0.42),
+        _region(image, "line_items_table_area", 0.03, 0.36, 0.97, 0.62),
+        _region(image, "totals_bottom_right", 0.52, 0.58, 0.97, 0.78),
+        _region(image, "totals_and_payment_area", 0.45, 0.55, 0.98, 0.82),
     ]
     return _dedupe_regions(regions)
+
+
+def _region(image: np.ndarray, name: str, x1: float, y1: float, x2: float, y2: float) -> OCRRegion:
+    h, w = image.shape[:2]
+    left = max(0, min(w - 1, int(w * x1)))
+    top = max(0, min(h - 1, int(h * y1)))
+    right = max(left + 1, min(w, int(w * x2)))
+    bottom = max(top + 1, min(h, int(h * y2)))
+    return OCRRegion(name, image[top:bottom, left:right], left, top, (left, top, right, bottom))
 
 
 def _crop(image: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> np.ndarray:

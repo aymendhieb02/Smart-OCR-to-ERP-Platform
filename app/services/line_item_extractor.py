@@ -42,10 +42,13 @@ def extract_line_items(text: str, blocks: list[OCRLine] | None = None) -> list[L
 def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
     if not blocks:
         return []
-    reconstructed_items = _extract_reconstructed_table_items([block for block in blocks if block.bbox])
+    positioned_blocks = [block for block in blocks if block.bbox]
+    reconstructed_items = _extract_reconstructed_table_items(positioned_blocks or blocks)
     if reconstructed_items:
         return reconstructed_items
-    anchored_items = _extract_anchored_table_rows([block for block in blocks if block.bbox])
+    if not positioned_blocks:
+        return []
+    anchored_items = _extract_anchored_table_rows(positioned_blocks)
     if anchored_items:
         return anchored_items
     rows = _group_blocks_by_row([block for block in blocks if block.bbox])
@@ -159,31 +162,43 @@ def _extract_reconstructed_table_items(blocks: list[OCRLine]) -> list[LineItem]:
     items: list[LineItem] = []
     for table in tables[:1]:
         for row in table.rows:
+            if row.get("invalid"):
+                continue
             values = row.get("values", {})
             description = values.get("description")
+            reference = values.get("reference")
             quantity = values.get("quantity")
+            discount = values.get("discount")
             unit_price = values.get("unit_price")
             total = values.get("total")
             tax_rate = values.get("tax_rate")
             unit = values.get("unit")
-            if not description or quantity is None or total is None:
+            if not description:
                 continue
-            if unit_price is None and quantity:
+            if unit_price is None and quantity and total is not None:
                 unit_price = round(total / quantity, 3)
-            line_total_ht = round(quantity * unit_price, 3) if quantity is not None and unit_price is not None else total
+            line_total_ht = values.get("line_total_ht")
+            if line_total_ht is None:
+                line_total_ht = round(quantity * unit_price, 3) if quantity is not None and unit_price is not None else total
+            if total is None and line_total_ht is not None:
+                total = line_total_ht
+            if quantity is None and total is None and unit_price is None:
+                continue
             items.append(LineItem(
+                reference=reference,
                 description=description,
                 quantity=quantity,
                 unit=unit,
                 unit_price=unit_price,
+                discount=discount,
                 line_total_ht=line_total_ht,
                 tax_rate=tax_rate,
                 line_total_ttc=total,
                 total=total,
-                confidence=row.get("confidence") or table.confidence,
+                confidence=min(row.get("confidence") or table.confidence or 0.65, 0.72) if row.get("needs_review") else (row.get("confidence") or table.confidence),
                 bbox=row.get("bbox"),
                 page=table.page,
-                source="reconstructed table",
+                source="reconstructed table review" if row.get("needs_review") else "reconstructed table",
             ))
     return items if len(items) >= 1 else []
 def _extract_anchored_table_rows(blocks: list[OCRLine]) -> list[LineItem]:

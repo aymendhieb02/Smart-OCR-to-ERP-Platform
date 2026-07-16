@@ -7,9 +7,15 @@ __pycache__/
 .ruff_cache/
 
 # Runtime outputs
+.cache/
+analysis/
 outputs/
 previews/
 uploads/
+app/static/previews/
+app/static/uploads/
+final_delivery_outputs/
+*.zip
 *.log
 server-*.err.log
 server-*.out.log
@@ -17,6 +23,7 @@ server-*.out.log
 # Benchmark generated artifacts
 dataset/predictions/
 dataset/reports/
+dataset/**/reports/
 
 # Local environment
 .env
