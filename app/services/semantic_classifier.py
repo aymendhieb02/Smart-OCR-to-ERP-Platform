@@ -9,8 +9,9 @@ COMPANY_SUFFIXES = (
     "llc", "ltd", "limited", "inc", "inc.", "plc", "sarl", "suarl", "corp", "corporation",
     "company", "co.", "group", "electronics", "services", "distribution", "trading", "industries",
     "interiors", "canada", "tunisie", "pharma", "pharmacy", "medical", "technologies",
+    "spa", "sarlau", "clinic", "laboratory", "labs", "logistics", "solutions",
 )
-TABLE_WORDS = ("description", "designation", "quantity", "qty", "qte", "price", "prix", "total", "amount", "tva", "vat", "net", "gross", "worth")
+TABLE_WORDS = ("description", "designation", "quantity", "qty", "qte", "unit", "unite", "unité", "price", "prix", "total", "amount", "tva", "vat", "net", "gross", "worth")
 CUSTOMER_LABELS = ("bill to", "invoice to", "client", "customer", "acheteur", "destinataire", "facture a", "facture à", "facturé à", "livre a", "livré à")
 SUPPLIER_LABELS = ("supplier", "seller", "vendor", "bill from", "fournisseur", "vendeur", "from")
 PAYMENT_WORDS = ("payment details", "payment", "iban", "rib", "swift", "bank", "banque")
@@ -77,6 +78,8 @@ def is_forbidden_party_name(text: str) -> bool:
     plain = strip_accents(text).lower().strip(" :#|-")
     if _is_postal_code_only(text):
         return True
+    if plain.replace("_", " ") in {"ship to", "bill to", "supplier", "seller", "vendor", "customer", "client", "address", "adresse", "phone", "email", "bank"}:
+        return True
     if _is_table_header(plain):
         return True
     if any(re.search(rf"\b{re.escape(word)}\b", plain) for word in PAYMENT_WORDS):
@@ -106,15 +109,17 @@ def _is_company_candidate(text: str) -> bool:
     alpha_words = [
         word
         for word in re.split(r"\s+", text.strip())
-        if re.fullmatch(r"[A-Za-z&.\-]+", word)
+        if re.fullmatch(r"[^\W\d_][^\d_&|]{1,}", word, flags=re.UNICODE)
     ]
     title_or_hyphenated_words = [
         word for word in alpha_words
         if "-" in word or re.match(r"^[A-Z][a-z]{2,}", word)
     ]
+    arabic_words = re.findall(r"[\u0600-\u06FF]{2,}", text)
     return (
         suffix_hit
         or uppercase_words >= 2
+        or len(arabic_words) >= 2
         or (letters >= 6 and len(title_or_hyphenated_words) >= 1 and len(alpha_words) <= 4 and not _looks_like_product_row(plain))
         or (letters >= 8 and len(alpha_words) >= 2 and not _looks_like_product_row(plain))
     )

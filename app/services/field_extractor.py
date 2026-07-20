@@ -1,4 +1,5 @@
 ﻿import re
+from datetime import datetime
 from typing import Any
 
 from app.core.schemas import Candidate, DocumentClassification, ExtractedInvoiceFields, LineItem, OCRLine
@@ -15,7 +16,7 @@ from app.utils.helpers import first_match, normalize_text, parse_amount, parse_d
 AMOUNT_VALUE = r"[+-]?(?:\d[\d .]*[,.]\d{2,3}|\d{1,3}(?:[ .]\d{3})+|\d+)"
 AMOUNT = rf"({AMOUNT_VALUE})"
 MONEY_VALUE = r"(?:[$€£]\s*)?[+-]?(?:\d[\d .]*[,.]\d{2,3}|\d{1,3}(?:[ .]\d{3})+|\d+)"
-MONTH_NAME = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+MONTH_NAME = r"(?:jan(?:uary|vier)?|feb(?:ruary)?|fevr(?:ier)?|f[eé]vr(?:ier)?|mar(?:ch|s)?|apr(?:il)?|avril|may|mai|jun(?:e)?|juin|jul(?:y)?|juillet|aug(?:ust)?|aout|ao[uû]t|sep(?:t(?:ember)?)?|septembre|oct(?:ober|obre)?|nov(?:ember|embre)?|dec(?:ember)?|decembre|d[eé]cembre)\.?"
 DATE_VALUE = rf"(?:\d{{1,2}}[\/\-.]\d{{1,2}}[\/\-.]\d{{2,4}}|\d{{4}}[\/\-.]\d{{1,2}}[\/\-.]\d{{1,2}}|{MONTH_NAME}\s+\d{{1,2}},?\s+\d{{2,4}}|\d{{1,2}}\s+{MONTH_NAME},?\s+\d{{2,4}})"
 DATE = rf"({DATE_VALUE})"
 PRODUCT_CODE = r"[A-Z]{2,}[A-Z0-9]*-[A-Z0-9]+"
@@ -45,12 +46,17 @@ def extract_with_candidates(
     text: str,
     ocr_blocks: list[OCRLine] | None = None,
     classification: DocumentClassification | None = None,
+    timing_recorder=None,
 ) -> tuple[ExtractedInvoiceFields, dict[str, list[Candidate]], dict[str, float], dict[str, Any]]:
     normalized = normalize_text(text)
     plain = strip_accents(normalized)
-    candidates = collect_field_candidates(normalized, ocr_blocks or [], classification)
+    with _timer_stage(timing_recorder, "candidate_generation"):
+        candidates = collect_field_candidates(normalized, ocr_blocks or [], classification, timing_recorder=timing_recorder)
     selected = _select_best_candidates(candidates)
-    party_decision = resolve_parties(candidates)
+    with _timer_stage(timing_recorder, "supplier_extraction", part="party_resolver"):
+        party_decision = resolve_parties(candidates)
+    with _timer_stage(timing_recorder, "customer_extraction", part="party_resolver"):
+        pass
     if party_decision.supplier:
         selected["supplier_name"] = party_decision.supplier
         candidates.setdefault("supplier_name", []).append(party_decision.supplier)
@@ -58,6 +64,7 @@ def extract_with_candidates(
         selected["customer_name"] = party_decision.customer
         candidates.setdefault("customer_name", []).append(party_decision.customer)
     _prefer_consistent_total_candidates(selected, candidates)
+    _resolve_date_collisions(selected)
     _separate_party_candidates(selected)
     fields = ExtractedInvoiceFields()
 
@@ -90,18 +97,22 @@ def extract_with_candidates(
     fields.purchase_order_number = _candidate_value(selected, "purchase_order_number") or _extract_purchase_order(plain)
     fields.supplier_tax_id = _candidate_value(selected, "supplier_tax_id") or _extract_supplier_tax_id(plain)
     fields.customer_tax_id = _candidate_value(selected, "customer_tax_id")
-    fields.line_items = extract_line_items(normalized, ocr_blocks)
+    with _timer_stage(timing_recorder, "line_item_reconstruction"):
+        fields.line_items = extract_line_items(normalized, ocr_blocks)
     confidences = {
         field: normalize_confidence(candidate.score, selected_value=_candidate_value(selected, field))
         for field, candidate in selected.items()
     }
     confidences = {field: value for field, value in confidences.items() if value is not None}
-    graph_debug = build_graph_debug(ocr_blocks or [])
-    table_debug = build_table_extraction_debug(ocr_blocks or [])
+    with _timer_stage(timing_recorder, "document_graph", part="debug"):
+        graph_debug = build_graph_debug(ocr_blocks or [])
+    with _timer_stage(timing_recorder, "table_detection", part="debug"):
+        table_debug = build_table_extraction_debug(ocr_blocks or [])
     debug = {"candidates": {field: [candidate.model_dump(mode="json") for candidate in values] for field, values in candidates.items()}}
     debug.update(graph_debug)
     debug["party_resolver"] = party_decision.debug
     debug["party_resolution_trace"] = party_decision.debug
+    debug["party_candidate_ranking"] = party_decision.debug.get("all_ranked_candidates", [])
     debug["table_extraction_debug"] = table_debug
     debug["field_traces"] = _build_field_traces(fields, candidates, selected)
     return fields, candidates, confidences, debug
@@ -111,6 +122,7 @@ def collect_field_candidates(
     text: str,
     ocr_blocks: list[OCRLine] | None = None,
     classification: DocumentClassification | None = None,
+    timing_recorder=None,
 ) -> dict[str, list[Candidate]]:
     plain = strip_accents(text)
     candidates: dict[str, list[Candidate]] = {}
@@ -146,43 +158,52 @@ def collect_field_candidates(
             },
         ))
 
-    regex_fields = {
-        "invoice_number": _extract_invoice_number(plain),
-        "invoice_date": _extract_invoice_date(plain),
-        "due_date": _extract_due_date(plain),
-        "currency": _extract_currency(text),
-        "amount_ht": _extract_amount_ht(plain),
-        "tva_amount": _extract_tva_amount(plain),
-        "amount_ttc": _extract_amount_ttc(plain),
-        "purchase_order_number": _extract_purchase_order(plain),
-        "supplier_tax_id": _extract_supplier_tax_id(plain),
-        "supplier_name": None if ocr_blocks else _extract_supplier_name(text),
-    }
-    for field, value in regex_fields.items():
-        add(field, value, 0.72, "regex")
-    tax_rate = _extract_tax_rate(plain, regex_fields.get("amount_ht"), regex_fields.get("tva_amount"))
-    add("tax_rate", tax_rate, 0.70, "regex")
+    with _timer_stage(timing_recorder, "metadata_extraction", source="regex"):
+        regex_fields = {
+            "invoice_number": _extract_invoice_number(plain),
+            "invoice_date": _extract_invoice_date(plain),
+            "due_date": _extract_due_date(plain),
+            "currency": _extract_currency(text),
+            "amount_ht": _extract_amount_ht(plain),
+            "tva_amount": _extract_tva_amount(plain),
+            "amount_ttc": _extract_amount_ttc(plain),
+            "purchase_order_number": _extract_purchase_order(plain),
+            "supplier_tax_id": _extract_supplier_tax_id(plain),
+            "supplier_name": None if ocr_blocks else _extract_supplier_name(text),
+        }
+        for field, value in regex_fields.items():
+            add(field, value, 0.72, "regex")
+        tax_rate = _extract_tax_rate(plain, regex_fields.get("amount_ht"), regex_fields.get("tva_amount"))
+        add("tax_rate", tax_rate, 0.70, "regex")
 
-    for line_index, line in enumerate(text.splitlines()):
-        line_plain = strip_accents(line)
-        _add_line_candidates(add, line, line_plain, line_index)
+        for line_index, line in enumerate(text.splitlines()):
+            line_plain = strip_accents(line)
+            _add_line_candidates(add, line, line_plain, line_index)
 
-    _add_multiline_candidates(add, text)
+        _add_multiline_candidates(add, text)
     for block in ocr_blocks or []:
         block_plain = strip_accents(block.text)
         _add_line_candidates(add, block.text, block_plain, block.line_index or 0, block)
 
     _add_block_sequence_candidates(add, ocr_blocks or [])
-    _add_layout_aware_candidates(add, ocr_blocks or [])
-    add_graph_field_candidates(add, ocr_blocks or [])
-    _add_spatial_date_candidates(add, ocr_blocks or [])
-    _add_stacked_totals_candidates(add, text, ocr_blocks or [])
-    _add_summary_table_candidates(add, ocr_blocks or [])
-    _add_party_candidates_from_blocks(add, ocr_blocks or [])
-    _add_safe_party_region_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "layout_analysis", source="candidate_generation"):
+        _add_layout_aware_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "document_graph", part="candidate_generation"):
+        add_graph_field_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "metadata_extraction", source="spatial_date"):
+        _add_spatial_date_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "totals_extraction"):
+        _add_stacked_totals_candidates(add, text, ocr_blocks or [])
+        _add_summary_table_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "supplier_extraction", source="ocr_blocks"):
+        _add_party_candidates_from_blocks(add, ocr_blocks or [])
+        _add_safe_party_region_candidates(add, ocr_blocks or [])
+    with _timer_stage(timing_recorder, "customer_extraction", source="ocr_blocks"):
+        pass
     if not ocr_blocks:
         _add_supplier_customer_candidates(add, text)
-    boost_candidates_from_memory(candidates, text)
+    with _timer_stage(timing_recorder, "correction_loading"):
+        boost_candidates_from_memory(candidates, text)
     _score_document_type_relevance(candidates, classification)
     return candidates
 
@@ -206,8 +227,8 @@ def _extract_invoice_number(text: str) -> str | None:
 
 def _extract_invoice_date(text: str) -> str | None:
     return first_match([
-        rf"(?:date\s*(?:de\s*)?(?:facture|invoice)|invoice\s*date|billing\s*date|issue\s*date|date\s*of\s*issue|date\s*d['ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢]?\s*(?:emission|ÃƒÂ©mission)|date\s*emission|Ã˜ÂªÃ˜Â§Ã˜Â±Ã™Å Ã˜Â®)\s*[:#-]?\s*{DATE}",
-        rf"(?:facture\s*du|issued\s*on|emitted\s*on|emise\s*le)\s*[:#-]?\s*{DATE}",
+        rf"(?:date\s*(?:de\s*)?(?:facture|invoice)|invoice\s*date|billing\s*date|issue\s*date|issued\s*date|date\s*of\s*issue|date\s*d['’]?\s*(?:emission|émission)|date\s*emission|Ã˜ÂªÃ˜Â§Ã˜Â±Ã™Å Ã˜Â®)\s*[:#-]?\s*{DATE}",
+        rf"(?:facture\s*du|issued\s*on|emitted\s*on|emise\s*le|émise\s*le|emis\s*le|émis\s*le)\s*[:#-]?\s*{DATE}",
         rf"^\s*date\s*[:#-]?\s*{DATE}",
         rf"(?:date|issued|emis|ÃƒÂ©mis)\s*$\n\s*{DATE}",
     ], text)
@@ -215,7 +236,7 @@ def _extract_invoice_date(text: str) -> str | None:
 
 def _extract_due_date(text: str) -> str | None:
     return first_match([
-        rf"(?:echeance|date\s*d['ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢]?\s*echeance|due\s*date|payment\s*due|payable\s*by|date\s*limite)\s*[:#-]?\s*{DATE}",
+        rf"(?:echeance|échéance|date\s*d['’]?\s*echeance|date\s*d['’]?\s*échéance|due\s*date|payment\s*due|payable\s*by|date\s*limite)\s*[:#-]?\s*{DATE}",
     ], text)
 
 
@@ -224,12 +245,17 @@ def _is_due_date_context(text: str) -> bool:
     return bool(re.search(r"\b(?:due[_\s-]*date|payment due|payable by|date limite|echeance|date d['’ ]?echeance|date decheance)\b", plain))
 
 
+def _is_order_or_delivery_date_context(text: str) -> bool:
+    plain = strip_accents(text).lower()
+    return bool(re.search(r"\b(?:order date|purchase order date|po date|date commande|date de commande|commande|delivery date|date livraison|date de livraison|shipping date|ship date|livraison)\b", plain))
+
+
 def _extract_currency(text: str) -> str | None:
     upper = text.upper()
     for code in ("TND", "EUR", "USD", "GBP", "MAD", "DZD", "CAD", "CHF", "AED"):
         if re.search(rf"\b{code}\b", upper):
             return code
-    if re.search(r"\bEURO(?:S)?\b", upper) or "ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬" in text or "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬" in text:
+    if re.search(r"\bEURO(?:S)?\b", upper) or "€" in text or "ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬" in text or "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬" in text:
         return "EUR"
     if "$" in text:
         return "USD"
@@ -293,7 +319,7 @@ def _extract_tax_rate(text: str, amount_ht: float | None, tva_amount: float | No
 
 def _extract_purchase_order(text: str) -> str | None:
     return first_match([
-        r"(?:purchase\s*order|po\s*(?:number|no\.?|#)?|bon\s*de\s*commande|commande|order\s*(?:number|no\.?)?)\s*[:#-]?\s*([A-Z0-9_\-\/.]{3,})",
+        r"(?:purchase\s*order|po\s*(?:number|no\.?|#)?|bon\s*de\s*commande|ref\.?\s*commande|réf\.?\s*commande|commande|order\s*(?:number|no\.?)?)\s*[:#-]?\s*([A-Z0-9_\-\/.]{3,})",
     ], text)
 
 
@@ -437,13 +463,13 @@ def _add_line_candidates(add, line: str, line_plain: str, line_index: int, block
     if date_match:
         if any(key in labels for key in ("echeance", "due date", "date limite", "ÃƒËœÃ‚Â§ÃƒËœÃ‚Â³ÃƒËœÃ‚ÂªÃƒËœÃ‚Â­Ãƒâ„¢Ã¢â‚¬Å¡ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¡")):
             add("due_date", date_match.group(1), 0.80, "date near due-date label", block)
-        elif "date" in labels or "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾ÃƒËœÃ‚ÂªÃƒËœÃ‚Â§ÃƒËœÃ‚Â±Ãƒâ„¢Ã…Â ÃƒËœÃ‚Â®" in labels:
+        elif not _is_order_or_delivery_date_context(labels) and ("date" in labels or "issued" in labels or "emise" in labels or "emis" in labels or "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾ÃƒËœÃ‚ÂªÃƒËœÃ‚Â§ÃƒËœÃ‚Â±Ãƒâ„¢Ã…Â ÃƒËœÃ‚Â®" in labels):
             add("invoice_date", date_match.group(1), 0.78, "date near date label", block)
 
     if any(key in labels for key in ("facture", "invoice", "n bl", "nÃƒâ€šÃ‚Â° bl", "ÃƒËœÃ‚Â±Ãƒâ„¢Ã¢â‚¬Å¡Ãƒâ„¢Ã¢â‚¬Â¦ ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾Ãƒâ„¢Ã‚ÂÃƒËœÃ‚Â§ÃƒËœÃ‚ÂªÃƒâ„¢Ã‹â€ ÃƒËœÃ‚Â±ÃƒËœÃ‚Â©")):
         add("invoice_number", _extract_invoice_number(line_plain) or _document_number_from_line(line_plain), 0.86, "number near document label", block)
     if any(key in labels for key in ("commande", "purchase order", "po number", "ÃƒËœÃ‚Â·Ãƒâ„¢Ã¢â‚¬Å¾ÃƒËœÃ‚Â¨ ÃƒËœÃ‚Â´ÃƒËœÃ‚Â±ÃƒËœÃ‚Â§ÃƒËœÃ‚Â¡")):
-        add("purchase_order_number", _extract_purchase_order(line_plain), 0.82, "order reference label", block)
+        add("purchase_order_number", _extract_purchase_order(line_plain) or _document_number_from_line(line_plain), 0.82, "order reference label", block)
 
     if any(key in labels for key in ("sous-total", "total ht", "subtotal", "hors taxe", "htva")):
         add("amount_ht", _last_amount(line), 0.86, "amount near HT/subtotal label", block)
@@ -526,6 +552,8 @@ def _add_multiline_candidates(add, text: str) -> None:
     for index, line in enumerate(lines[:-1]):
         label = strip_accents(line).lower()
         following = " ".join(lines[index + 1:index + 3])
+        if _is_order_or_delivery_date_context(label):
+            continue
         if _is_invoice_date_label(label):
             date_value = first_match([DATE], line) or first_match([DATE], following)
             add("invoice_date", date_value, 0.86, "date label followed by value")
@@ -534,6 +562,8 @@ def _add_multiline_candidates(add, text: str) -> None:
             add("due_date", date_value, 0.84, "due-date label followed by value")
         elif any(key in label for key in ("facture n", "invoice number", "invoice no", "n facture")):
             add("invoice_number", _document_number_from_line(following), 0.84, "document number label followed by value")
+        elif any(key in label for key in ("purchase order", "po number", "bon de commande", "ref commande", "réf commande", "commande")):
+            add("purchase_order_number", _extract_purchase_order(line) or _document_number_from_line(following), 0.84, "purchase order label followed by value")
 
 
 def _add_block_sequence_candidates(add, blocks: list[OCRLine]) -> None:
@@ -541,12 +571,16 @@ def _add_block_sequence_candidates(add, blocks: list[OCRLine]) -> None:
     for index, block in enumerate(ordered[:-1]):
         label = strip_accents(block.text).lower()
         next_text = " ".join(next_block.text for next_block in ordered[index + 1:index + 3])
+        if _is_order_or_delivery_date_context(label):
+            continue
         if _is_invoice_date_label(label):
             add("invoice_date", first_match([DATE], block.text) or first_match([DATE], next_text), 0.88, "OCR block date label followed by value", block)
         elif any(key in label for key in ("due date", "echeance", "date limite", "payment due")):
             add("due_date", first_match([DATE], block.text) or first_match([DATE], next_text), 0.86, "OCR block due-date label followed by value", block)
         elif any(key in label for key in ("invoice number", "invoice no", "invoice #", "facture n", "n facture", "document number")):
             add("invoice_number", _document_number_from_line(block.text) or _document_number_from_line(next_text), 0.88, "OCR block document number label followed by value", block)
+        elif any(key in label for key in ("purchase order", "po number", "bon de commande", "ref commande", "réf commande", "commande")):
+            add("purchase_order_number", _extract_purchase_order(block.text) or _document_number_from_line(next_text), 0.86, "OCR block purchase order label followed by value", block)
 
 
 def _add_stacked_totals_candidates(add, text: str, blocks: list[OCRLine]) -> None:
@@ -672,12 +706,17 @@ def _add_layout_aware_candidates(add, blocks: list[OCRLine]) -> None:
         if any(label in plain for label in ("invoice no", "invoice number", "invoice #", "facture n", "n facture", "numero", "numÃƒÂ©ro")):
             value = _document_number_from_line(strip_accents(line.text))
             add("invoice_number", value, 0.92, "layout label proximity: invoice number", first_block)
-        if any(label in plain for label in ("date facture", "invoice date", "issue date", "billing date", "date:")) and not _is_due_date_context(plain):
+        if any(label in plain for label in ("date facture", "invoice date", "issue date", "issued", "billing date", "date:", "emise", "emis")) and not _is_due_date_context(plain) and not _is_order_or_delivery_date_context(plain):
             date_value = first_match([DATE], line.text)
             add("invoice_date", date_value, 0.90, "layout label proximity: invoice date", first_block)
         if _is_due_date_context(plain):
             date_value = first_match([DATE], line.text)
             add("due_date", date_value, 0.88, "layout label proximity: due date", first_block)
+        if any(label in plain for label in ("purchase order", "po number", "bon de commande", "ref commande", "réf commande", "commande")):
+            add("purchase_order_number", _extract_purchase_order(strip_accents(line.text)) or _document_number_from_line(strip_accents(line.text)), 0.86, "layout label proximity: purchase order", first_block)
+        currency = _extract_currency(line.text)
+        if currency and any(label in plain for label in ("total", "amount", "montant", "ttc", "currency", "devise")):
+            add("currency", currency, 0.86, "layout currency near amount/total", first_block)
 
     for block in logical_blocks:
         block_type = block.get("block_type")
@@ -742,7 +781,9 @@ def _add_spatial_date_candidates(add, blocks: list[OCRLine]) -> None:
     for index, block in enumerate(ordered):
         label = strip_accents(block.text).lower().strip(" :#-")
         is_due_label = _is_due_date_context(label)
-        is_invoice_label = _is_invoice_date_label(label) or any(key in label for key in ("issue date", "date of issue", "date emission", "date d emission"))
+        is_invoice_label = not _is_order_or_delivery_date_context(label) and (
+            _is_invoice_date_label(label) or any(key in label for key in ("issue date", "issued", "date of issue", "date emission", "date d emission", "emise", "emis"))
+        )
         if not (is_invoice_label or is_due_label):
             continue
         inline = first_match([DATE], block.text)
@@ -817,11 +858,12 @@ def _add_safe_party_region_candidates(add, blocks: list[OCRLine]) -> None:
                 continue
             if role == "customer" and center_x < max_x * 0.38:
                 continue
-            label_distance = min(
-                (abs(block.bbox.y1 - label.bbox.y2) + abs(center_x - ((label.bbox.x1 + label.bbox.x2) / 2)) * 0.15)
+            label_distances = [
+                abs(block.bbox.y1 - label.bbox.y2) + abs(center_x - ((label.bbox.x1 + label.bbox.x2) / 2)) * 0.15
                 for label in label_blocks
                 if label.bbox and label.bbox.y1 <= block.bbox.y1
-            ) if label_blocks else 9999
+            ]
+            label_distance = min(label_distances) if label_distances else 9999
             score = 0.70 if label_distance < 260 else 0.58
             source = f"safe {role} header region fallback"
             add(f"{role}_name", _clean_name(block.text), score, source, block)
@@ -1043,7 +1085,8 @@ def _rank_date_candidates(values: list[Candidate], field: str) -> list[Candidate
     for candidate in values:
         text = str(candidate.value or "")
         score = candidate.score
-        if parse_date(text) is None:
+        parsed_date = _parse_candidate_date(candidate)
+        if parsed_date is None:
             score -= 0.5
         source = (candidate.source or "").lower()
         if "table" in source or "row" in source:
@@ -1055,10 +1098,36 @@ def _rank_date_candidates(values: list[Candidate], field: str) -> list[Candidate
         if field == "due_date" and any(token in source for token in ("invoice date", "issue date", "date emission")):
             score -= 0.30
         updated = candidate.model_copy(deep=True)
+        if parsed_date is not None:
+            updated.value = parsed_date.isoformat()
+            updated.normalized_value = parsed_date.isoformat()
         updated.score = round(max(0.0, min(1.0, score)), 3)
         updated.confidence = updated.score
         ranked.append(updated)
     return sorted(ranked, key=lambda item: item.score, reverse=True)
+
+
+def _parse_candidate_date(candidate: Candidate):
+    value = str(candidate.value or "")
+    numeric = re.search(r"\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b", value)
+    if not numeric:
+        return parse_date(value)
+    first = int(numeric.group(1))
+    second = int(numeric.group(2))
+    year = numeric.group(3)
+    if first > 12 or second > 12:
+        return parse_date(value)
+    context = strip_accents(" ".join(str(part or "") for part in (candidate.source, candidate.evidence_text))).lower()
+    french_markers = ("date facture", "facture", "echeance", "emission", "emise", "emis", "commande", "livraison")
+    english_markers = ("invoice date", "issued", "issue date", "date of issue", "bill date", "due date", "payment due")
+    prefer_month_first = any(marker in context for marker in english_markers) and not any(marker in context for marker in french_markers)
+    if not prefer_month_first:
+        return parse_date(value)
+    normalized_year = year if len(year) == 4 else f"20{year}"
+    try:
+        return datetime.strptime(f"{first:02d}/{second:02d}/{normalized_year}", "%m/%d/%Y").date()
+    except ValueError:
+        return parse_date(value)
 
 
 def _rank_amount_candidates(values: list[Candidate], field: str) -> list[Candidate]:
@@ -1124,6 +1193,27 @@ def _prefer_consistent_total_candidates(selected: dict[str, Candidate], candidat
                 score=min(best_triplet[0].score, best_triplet[1].score),
                 source="consistent total candidate combination",
             )
+
+
+def _resolve_date_collisions(selected: dict[str, Candidate]) -> None:
+    invoice = selected.get("invoice_date")
+    due = selected.get("due_date")
+    if not invoice or not due:
+        return
+    invoice_date = parse_date(str(invoice.value))
+    due_date = parse_date(str(due.value))
+    if not invoice_date or not due_date or invoice_date != due_date:
+        return
+    invoice_source = strip_accents(invoice.source or "").lower()
+    due_source = strip_accents(due.source or "").lower()
+    if "due" in due_source or "echeance" in due_source or "date limite" in due_source:
+        if invoice.score <= due.score or "generic" in invoice_source or "date near date label" in invoice_source:
+            selected.pop("invoice_date", None)
+            return
+    if "invoice" in invoice_source or "issue" in invoice_source or "facture" in invoice_source:
+        selected.pop("due_date", None)
+        return
+    selected.pop("invoice_date" if invoice.score <= due.score else "due_date", None)
 
 
 def _separate_party_candidates(selected: dict[str, Candidate]) -> None:
@@ -1294,7 +1384,8 @@ def _looks_like_address_line(line: str) -> bool:
 
 
 def _is_invoice_date_label(label: str) -> bool:
-    return any(key in label for key in ("date of issue", "invoice date", "date facture", "date d'emission", "date d emission", "ÃƒËœÃ‚ÂªÃƒËœÃ‚Â§ÃƒËœÃ‚Â±Ãƒâ„¢Ã…Â ÃƒËœÃ‚Â®")) or label == "date"
+    normalized = label.strip().rstrip(":")
+    return any(key in normalized for key in ("date of issue", "invoice date", "date facture", "date d'emission", "date d emission", "issued", "issue", "emise", "emis", "ÃƒËœÃ‚ÂªÃƒËœÃ‚Â§ÃƒËœÃ‚Â±Ãƒâ„¢Ã…Â ÃƒËœÃ‚Â®")) or normalized == "date"
 
 
 def _money_values(text: str) -> list[float]:
@@ -1304,6 +1395,20 @@ def _money_values(text: str) -> list[float]:
         if value is not None:
             values.append(value)
     return values
+
+
+def _timer_stage(timing_recorder, name: str, **metadata):
+    if timing_recorder is None:
+        return _noop_stage()
+    return timing_recorder.stage(name, **metadata)
+
+
+class _noop_stage:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
 
 
 

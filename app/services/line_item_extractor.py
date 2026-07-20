@@ -1,8 +1,10 @@
 import re
 from collections import defaultdict
 
+from app.core.config import settings
 from app.core.schemas import LineItem, OCRLine
 from app.services.document_layout import group_ocr_lines, reconstruct_tables
+from app.services.table_reconstruction_engine import reconstruct_line_items as reconstruct_p3_line_items
 from app.utils.helpers import parse_amount, strip_accents
 
 
@@ -43,6 +45,16 @@ def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
     if not blocks:
         return []
     positioned_blocks = [block for block in blocks if block.bbox]
+    p3_result = reconstruct_p3_line_items(positioned_blocks)
+    if p3_result.line_items and _table_profile_allows_result(p3_result.selected_strategy):
+        return p3_result.line_items
+    if (
+        p3_result.selected_strategy == "UNRESOLVED"
+        and p3_result.diagnostics.get("header_confirmed")
+        and not p3_result.diagnostics.get("rows_reconstructed")
+        and not _has_combined_table_header(positioned_blocks)
+    ):
+        return []
     reconstructed_items = _extract_reconstructed_table_items(positioned_blocks or blocks)
     if reconstructed_items:
         return reconstructed_items
@@ -74,6 +86,13 @@ def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
         elif header_seen and _looks_like_description_fragment(row_text):
             pending_description = f"{pending_description or ''} {row_text}".strip()
     return items
+
+
+def _table_profile_allows_result(strategy: str | None) -> bool:
+    profile = getattr(settings, "table_reconstruction_profile", "p3_stable")
+    if profile == "p3_1_adaptive":
+        return True
+    return strategy in {"COLUMNAR_TABLE", "HEADERLESS_COLUMNAR"}
 
 
 def parse_line_item(line: str) -> LineItem | None:
@@ -201,6 +220,17 @@ def _extract_reconstructed_table_items(blocks: list[OCRLine]) -> list[LineItem]:
                 source="reconstructed table review" if row.get("needs_review") else "reconstructed table",
             ))
     return items if len(items) >= 1 else []
+
+
+def _has_combined_table_header(blocks: list[OCRLine]) -> bool:
+    for block in blocks:
+        lower = strip_accents(block.text).lower()
+        hits = sum(1 for word in ("description", "quantity", "qty", "price", "total") if word in lower)
+        if hits >= 4:
+            return True
+    return False
+
+
 def _extract_anchored_table_rows(blocks: list[OCRLine]) -> list[LineItem]:
     if not blocks:
         return []
@@ -263,12 +293,14 @@ def _detect_table_stop_y(blocks: list[OCRLine], header_y: float) -> float:
     stop_words = ("subtotal", "sub total", "sous-total", "sales tax", "tax", "tva", "shipping", "total due", "total ttc", "amount due")
     stop_candidates = [
         block.bbox.y1 for block in blocks
-        if block.bbox.y1 > header_y
+        if block.bbox
+        and block.bbox.y1 > header_y
         and any(word in strip_accents(block.text).lower() for word in stop_words)
     ]
     if stop_candidates:
         return min(stop_candidates)
-    return max(block.bbox.y2 for block in blocks) + 20
+    bottom_edges = [block.bbox.y2 for block in blocks if block.bbox]
+    return (max(bottom_edges) + 20) if bottom_edges else header_y + 20
 
 
 def _detect_row_anchors(blocks: list[OCRLine], header_y: float, stop_y: float, header: dict[str, float]) -> list[OCRLine]:
@@ -507,7 +539,10 @@ def _looks_like_row_number(numeric_blocks: list[tuple[OCRLine, float]], row_bloc
     if len(numeric_blocks) < 5:
         return False
     first_block, first_value = numeric_blocks[0]
-    row_left = min(block.bbox.x1 for block in row_blocks if block.bbox)
+    left_edges = [block.bbox.x1 for block in row_blocks if block.bbox]
+    if not left_edges:
+        return False
+    row_left = min(left_edges)
     return (
         first_value is not None
         and float(first_value).is_integer()

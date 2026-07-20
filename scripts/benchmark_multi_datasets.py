@@ -25,11 +25,13 @@ sys.path.insert(0, str(ROOT))
 
 from app.core.schemas import ProcessInvoiceResponse
 from app.services.ocr_engine import OCREngine
+from app.services.ocr_profiles import PROFILES
+from app.services.party_name_normalizer import compare_party_names
 from app.services.pipeline_runner import process_document_file
 from scripts.dataset_label_adapter import load_ground_truth
 from scripts.generate_multi_dataset_report import generate_reports
 
-DATASETS_ROOT_DEFAULT = Path(r"D:\Stage_mr_f\sources\datasets")
+DATASETS_ROOT_DEFAULT = ROOT.parent / "sources" / "datasets"
 OUTPUT_ROOT = ROOT / "dataset" / "reports" / "multi_dataset_benchmark"
 PREDICTIONS_ROOT = OUTPUT_ROOT / "predictions"
 CHECKPOINT_PATH = OUTPUT_ROOT / "checkpoint.json"
@@ -124,6 +126,11 @@ class DatasetDocument:
 
 def main() -> None:
     args = parse_args()
+    if uses_p1_benchmark(args):
+        from scripts import large_benchmark_runner
+
+        raise SystemExit(large_benchmark_runner.run(args, sys.modules[__name__]))
+
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     environment = collect_environment_status()
     write_json(ENVIRONMENT_PATH, environment)
@@ -198,6 +205,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark the OCR-to-ERP pipeline across multiple datasets.")
     parser.add_argument("--datasets-root", default=str(DATASETS_ROOT_DEFAULT), help="Root folder containing multiple datasets.")
     parser.add_argument("--dataset", default=None, help="Optional single dataset name to benchmark.")
+    parser.add_argument("--datasets", nargs="*", default=None, help="Optional list of dataset names to benchmark.")
     parser.add_argument("--limit-per-dataset", type=int, default=50, help="Maximum sampled documents per dataset.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic sampling.")
     parser.add_argument("--force", action="store_true", help="Reprocess even if prediction JSON already exists.")
@@ -205,7 +213,57 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ocr-mode", choices=["fast", "balanced", "accurate"], default="balanced", help="OCR mode used by the benchmark.")
     parser.add_argument("--no-ocr-cache", action="store_true", help="Disable disk OCR cache.")
     parser.add_argument("--refresh-ocr-cache", action="store_true", help="Ignore existing OCR cache and rewrite entries.")
+    parser.add_argument("--run-id", default=None, help="P1 isolated benchmark run ID.")
+    parser.add_argument("--resume", action="store_true", help="Resume a previous P1 run.")
+    parser.add_argument("--restart", action="store_true", help="Restart an existing P1 run ID after clearing run state files.")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry documents marked failed in the checkpoint.")
+    parser.add_argument("--retry-timeouts", action="store_true", help="Retry timeout documents from an existing P1 run.")
+    parser.add_argument("--retry-errors", action="store_true", help="Retry error documents from an existing P1 run.")
+    parser.add_argument("--force-reprocess", action="store_true", help="Reprocess selected documents even if previous result rows exist.")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip documents already present in results.jsonl.")
+    parser.add_argument("--limit", type=int, default=None, help="Global document limit after deterministic selection.")
+    parser.add_argument("--offset", type=int, default=0, help="Global document offset after deterministic selection.")
+    parser.add_argument("--document-types", nargs="*", default=None, help="Reserved metadata filter for future labeled datasets.")
+    parser.add_argument("--languages", nargs="*", default=None, help="Reserved metadata filter for future labeled datasets.")
+    parser.add_argument("--workers", type=int, default=1, help="P1 worker count. Current safe mode runs one worker.")
+    parser.add_argument("--document-timeout", type=float, default=None, help="Per-document timeout budget in seconds.")
+    parser.add_argument("--ocr-profile", choices=sorted(PROFILES), default=None, help="OCR profile used by the benchmark.")
+    parser.add_argument("--disable-cache", action="store_true", help="Disable OCR disk cache in the P1 runner.")
+    parser.add_argument("--refresh-cache", action="store_true", help="Refresh OCR cache entries in the P1 runner.")
+    parser.add_argument("--reuse-ocr", action="store_true", help="Record intent to reuse OCR/layout outputs where available.")
+    parser.add_argument("--checkpoint-every", type=int, default=1, help="Checkpoint every N documents.")
+    parser.add_argument("--report-only", action="store_true", help="Generate reports from an existing P1 results.jsonl without processing.")
+    parser.add_argument("--size", choices=["smoke", "small", "medium", "large", "full"], default=None, help="P1 deterministic benchmark size.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop after 10 critical document errors.")
     return parser.parse_args()
+
+
+def uses_p1_benchmark(args: argparse.Namespace) -> bool:
+    return any(
+        [
+            args.run_id,
+            args.resume,
+            args.restart,
+            args.retry_failed,
+            args.retry_timeouts,
+            args.retry_errors,
+            args.force_reprocess,
+            args.skip_existing,
+            args.limit is not None,
+            args.offset,
+            args.document_types,
+            args.languages,
+            args.workers != 1,
+            args.document_timeout is not None,
+            args.ocr_profile,
+            args.disable_cache,
+            args.refresh_cache,
+            args.reuse_ocr,
+            args.report_only,
+            args.size,
+            args.fail_fast,
+        ]
+    )
 
 
 def collect_environment_status() -> dict[str, Any]:
@@ -605,14 +663,8 @@ def compare_amounts(predicted: Any, truth: Any) -> bool | None:
 def compare_names(predicted: Any, truth: Any) -> bool | None:
     if predicted in (None, "") or truth in (None, ""):
         return None
-    try:
-        from rapidfuzz.fuzz import ratio  # type: ignore
-
-        return ratio(str(predicted), str(truth)) >= 85
-    except Exception:
-        pred = normalize_text(str(predicted))
-        actual = normalize_text(str(truth))
-        return pred in actual or actual in pred
+    comparison = compare_party_names(predicted, truth)
+    return comparison.final_match is True
 
 
 def normalize_date(value: Any) -> str | None:

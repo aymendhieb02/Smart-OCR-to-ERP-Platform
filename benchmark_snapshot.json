@@ -1,0 +1,79 @@
+{
+  "release": "v1.0-deterministic",
+  "generated_at": "2026-07-20T16:22:36.177725+00:00",
+  "benchmark_ids": {
+    "final_small": "v1_deterministic_50doc_01",
+    "stable_table_reference": "optimized_p3_table_50doc_01",
+    "experimental_table_reference": "optimized_p3_1_table_50doc_01"
+  },
+  "configuration": {
+    "documents": 50,
+    "seed": 42,
+    "ocr_profile": "optimized_mobile_v4",
+    "ocr_mode": "balanced",
+    "table_reconstruction_profile": "p3_stable",
+    "experimental_table_reconstruction_profile": "p3_1_adaptive",
+    "workers": 1,
+    "document_timeout_seconds": 120,
+    "reuse_ocr": true,
+    "configuration_hash": "9699262229f6b19dc0ab0f5ad813adc79aa9a777c693ccb183ff46e6a4640f32",
+    "effective_ocr_config": {
+      "detector": "PP-OCRv4_mobile_det",
+      "recognizer": "en_PP-OCRv4_mobile_rec",
+      "cpu_threads": 4,
+      "input_max_side": 1600,
+      "use_gpu": false,
+      "enable_mkldnn": false
+    }
+  },
+  "benchmark_metrics": {
+    "invoice_number_normalized_accuracy": 1.0,
+    "invoice_date_normalized_accuracy": 1.0,
+    "amount_ttc_normalized_accuracy": 0.7692,
+    "supplier_canonical_accuracy": 0.7,
+    "customer_canonical_accuracy": 1.0,
+    "canonical_line_item_presence_accuracy": 0.6,
+    "canonical_exact_row_count_accuracy": 0.52,
+    "canonical_row_count_within_one_accuracy": 0.68,
+    "canonical_line_item_mae": 1.76
+  },
+  "execution_metrics": {
+    "unique_document_count": 50,
+    "execution_completed_count": 50,
+    "execution_failed_count": 0,
+    "execution_timeout_count": 0,
+    "validation_valid_count": 1,
+    "validation_needs_review_count": 17,
+    "validation_invalid_count": 32,
+    "erp_ready_count": 1,
+    "erp_blocked_count": 49,
+    "cached_attempt_count": 50,
+    "fresh_ocr_attempt_count": 0,
+    "cached_median_seconds": 1.494,
+    "cached_p90_seconds": 2.916
+  },
+  "test_summary": {
+    "compile_check": "passed",
+    "full_pytest": "260 passed, 1 warning",
+    "focused_tests": "67 passed"
+  },
+  "freeze": {
+    "ocr": true,
+    "layout_analysis": true,
+    "semantic_blocks": true,
+    "candidate_extraction": true,
+    "party_resolver": true,
+    "table_reconstruction": true,
+    "financial_reasoning": true,
+    "validation_engine": true,
+    "confidence_engine": true,
+    "erp_readiness": true,
+    "benchmark_infrastructure": true,
+    "ground_truth_adapters": true
+  },
+  "notes": [
+    "p3_stable remains the default deterministic table profile.",
+    "p3_1_adaptive remains selectable but disabled by default.",
+    "No final table heuristic was added because diagnostics did not justify a safe non-regressive change."
+  ]
+}

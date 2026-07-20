@@ -227,11 +227,17 @@ def _recover_consistent_totals(
     ht_candidates = _numeric_candidate_values(candidates.get("amount_ht", []), fields.amount_ht)
     tva_candidates = _numeric_candidate_values(candidates.get("tva_amount", []), fields.tva_amount)
     ttc_candidates = _numeric_candidate_values(candidates.get("amount_ttc", []), fields.amount_ttc)
+    line_sum = _line_ht_sum(line_items)
+    if line_sum is not None and fields.amount_ht is None:
+        ht_candidates.append((line_sum, 0.82, "validated line total sum"))
+    if fields.tax_rate is not None and line_sum is not None and (fields.amount_ht is None or fields.tva_amount is None):
+        inferred_tva = round(line_sum * fields.tax_rate / 100, 3)
+        tva_candidates.append((inferred_tva, 0.76, "tax rate applied to line total sum"))
+        ttc_candidates.append((round(line_sum + inferred_tva, 3), 0.76, "line sum plus inferred tax"))
     if not ht_candidates or not ttc_candidates:
         return None
     if not tva_candidates:
         tva_candidates = [(None, 0.0, "missing")]
-    line_sum = _line_total_sum(line_items)
     best: tuple[float, float | None, float | None, float | None, str] | None = None
     for ht, ht_score, ht_source in ht_candidates:
         for tva, tva_score, tva_source in tva_candidates:
@@ -301,6 +307,20 @@ def _numeric_candidate_values(candidates: list[Candidate], selected_value: float
 def _line_total_sum(line_items: list[LineItem]) -> float | None:
     totals = [item.line_total_ttc if item.line_total_ttc is not None else item.total for item in line_items]
     totals = [value for value in totals if value is not None]
+    if not totals:
+        return None
+    return round(sum(totals), 3)
+
+
+def _line_ht_sum(line_items: list[LineItem]) -> float | None:
+    totals = []
+    for item in line_items:
+        if item.line_total_ht is not None:
+            totals.append(item.line_total_ht)
+        elif item.quantity is not None and item.unit_price is not None:
+            totals.append(round(item.quantity * item.unit_price, 3))
+        elif item.tax_amount is not None and item.line_total_ttc is not None:
+            totals.append(round(item.line_total_ttc - item.tax_amount, 3))
     if not totals:
         return None
     return round(sum(totals), 3)

@@ -19,16 +19,18 @@ def reason_financials(
     errors: list[str] = []
     warnings: list[str] = []
     checks: dict[str, Any] = {}
+    adjustments = _normalize_adjustments(shipping=shipping, discount=discount, stamp_tax=stamp_tax)
+    shipping = adjustments["shipping"]
+    discount = adjustments["discount"]
+    stamp_tax = adjustments["stamp_tax"]
     if fields.amount_ht is not None and fields.tva_amount is not None and fields.amount_ttc is not None:
-        expected = round(fields.amount_ht + fields.tva_amount + (shipping or 0) + (stamp_tax or 0) - (discount or 0), 3)
+        expected = round(fields.amount_ht + fields.tva_amount + shipping + stamp_tax - discount, 3)
         delta = round(abs(expected - fields.amount_ttc), 3)
         checks["ht_vat_adjustments_to_ttc"] = {
             "expected": expected,
             "actual": fields.amount_ttc,
             "delta": delta,
-            "shipping": shipping,
-            "discount": discount,
-            "stamp_tax": stamp_tax,
+            **adjustments,
             "passed": delta <= max(tolerance, abs(fields.amount_ttc) * 0.005),
         }
         if not checks["ht_vat_adjustments_to_ttc"]["passed"]:
@@ -65,4 +67,30 @@ def reason_financials(
         "financial_warnings": warnings,
         "checks": checks,
         "tolerance": tolerance,
+        "explanation": _build_financial_explanation(checks, errors, warnings, adjustments),
     }
+
+
+def _normalize_adjustments(*, shipping: float | None, discount: float | None, stamp_tax: float | None) -> dict[str, float]:
+    return {
+        "shipping": round(float(shipping or 0), 3),
+        "discount": round(abs(float(discount or 0)), 3),
+        "stamp_tax": round(float(stamp_tax or 0), 3),
+    }
+
+
+def _build_financial_explanation(checks: dict[str, Any], errors: list[str], warnings: list[str], adjustments: dict[str, float]) -> str:
+    if errors:
+        return "Financial reconciliation failed: " + "; ".join(errors)
+    if checks.get("ht_vat_adjustments_to_ttc", {}).get("passed"):
+        parts = ["HT + VAT"]
+        if adjustments["shipping"]:
+            parts.append("+ shipping")
+        if adjustments["stamp_tax"]:
+            parts.append("+ stamp duty")
+        if adjustments["discount"]:
+            parts.append("- discount")
+        return "Financial reconciliation passed using " + " ".join(parts)
+    if warnings:
+        return "Financial reconciliation requires review: " + "; ".join(warnings)
+    return "Financial reconciliation completed"

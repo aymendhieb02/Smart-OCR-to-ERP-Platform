@@ -7,6 +7,9 @@ from typing import Any
 
 from dateutil import parser as date_parser
 
+from app.services.party_name_normalizer import adapt_party_ground_truth
+from scripts.table_ground_truth_adapter import adapt_table_ground_truth
+
 NORMALIZED_EMPTY = {
     "document_type": None,
     "supplier_name": None,
@@ -15,6 +18,7 @@ NORMALIZED_EMPTY = {
     "invoice_date": None,
     "amount_ttc": None,
     "line_items": [],
+    "table_ground_truth": None,
 }
 
 KEY_ALIASES = {
@@ -46,7 +50,7 @@ def load_ground_truth(label_path: str | Path | None) -> dict[str, Any]:
         by_key.setdefault(_normalize_key(key), []).append(value)
 
     for field, aliases in KEY_ALIASES.items():
-        value = _pick_first_value(by_key, aliases)
+        value = _pick_first_party_value(by_key, aliases) if field in {"supplier_name", "customer_name"} else _pick_first_value(by_key, aliases)
         if value is None:
             continue
         if field == "invoice_date":
@@ -55,6 +59,9 @@ def load_ground_truth(label_path: str | Path | None) -> dict[str, Any]:
             normalized[field] = _normalize_amount(value)
         elif field == "line_items":
             normalized[field] = _normalize_line_items(value)
+        elif field in {"supplier_name", "customer_name"}:
+            party = adapt_party_ground_truth(value)
+            normalized[field] = party.raw_value if party.canonical_name else _clean_scalar(value)
         else:
             normalized[field] = _clean_scalar(value)
 
@@ -62,6 +69,8 @@ def load_ground_truth(label_path: str | Path | None) -> dict[str, Any]:
     for key, value in parsed_specific.items():
         if normalized.get(key) in (None, [], "") and value not in (None, [], ""):
             normalized[key] = value
+    table_truth = adapt_table_ground_truth(path, payload=payload)
+    normalized["table_ground_truth"] = table_truth.to_dict()
 
     return normalized
 
@@ -118,6 +127,19 @@ def _pick_first_value(values_by_key: dict[str, list[Any]], aliases: set[str]) ->
     for alias in aliases:
         bucket = values_by_key.get(_normalize_key(alias), [])
         for value in bucket:
+            cleaned = _clean_scalar(value)
+            if cleaned not in (None, "", [], {}):
+                return value
+    return None
+
+
+def _pick_first_party_value(values_by_key: dict[str, list[Any]], aliases: set[str]) -> Any:
+    for alias in aliases:
+        bucket = values_by_key.get(_normalize_key(alias), [])
+        for value in bucket:
+            party = adapt_party_ground_truth(value)
+            if party.canonical_name:
+                return value
             cleaned = _clean_scalar(value)
             if cleaned not in (None, "", [], {}):
                 return value

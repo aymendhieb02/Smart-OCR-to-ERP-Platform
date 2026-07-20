@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.schemas import BoundingBox, OCRLine
+from app.services.table_reconstruction_engine import reconstruct_line_items as reconstruct_p3_line_items
 from app.utils.helpers import parse_amount, strip_accents
 
 HEADER_KEYWORDS = ("description", "designation", "item", "product", "quantity", "qty", "qte", "unit", "prix", "price", "total", "amount", "tva", "vat")
@@ -103,6 +104,7 @@ def build_table_extraction_debug(
     if not anchor_candidates and selected_tables:
         anchor_candidates.append({"type": "text_sequence", "bbox": selected_tables[0].bbox.model_dump(mode="json"), "score": selected_tables[0].confidence, "keywords": []})
     raw_rows = [row for table in selected_tables for row in table.rows]
+    p3_result = reconstruct_p3_line_items(blocks)
     invalid_rows = [row for row in raw_rows if row.get("invalid")]
     inferred_columns = [
         {"name": key, "center": value.get("center"), "confidence": value.get("confidence", table.confidence)}
@@ -118,10 +120,16 @@ def build_table_extraction_debug(
         "validated_rows": validated_rows or [],
         "review_rows": review_rows or [],
         "rejection_reasons": [reason for row in raw_rows for reason in row.get("rejection_reasons", [])],
+        "p3_table_reconstruction": p3_result.to_debug_dict(),
         "counts": {
             "raw_candidate_rows": len(raw_rows),
             "invalid_rows": len(invalid_rows),
             "selected_tables": len(selected_tables),
+            "p3_candidate_rows": p3_result.diagnostics.get("candidate_row_count", 0),
+            "p3_reconstructed_rows": len(p3_result.rows),
+            "p3_validated_rows": p3_result.diagnostics.get("validated_row_count", 0),
+            "p3_review_rows": p3_result.diagnostics.get("review_row_count", 0),
+            "p3_unresolved_fragments": len(p3_result.unresolved_fragments),
         },
     }
 
@@ -629,14 +637,14 @@ def _infer_columns(header: OCRVisualLine) -> dict[str, dict[str, Any]]:
             key = "description"
         elif any(word in text for word in QUANTITY_WORDS):
             key = "quantity"
-        elif any(word in text for word in UNIT_WORDS):
-            key = "unit"
         elif "net worth" in text or "net amount" in text:
             key = "line_total_ht"
         elif "gross worth" in text or "gross total" in text:
             key = "total"
         elif any(word in text for word in PRICE_WORDS):
             key = "unit_price"
+        elif any(word in text for word in UNIT_WORDS):
+            key = "unit"
         elif any(word in text for word in DISCOUNT_WORDS):
             key = "discount"
         elif any(word in text for word in TAX_WORDS):

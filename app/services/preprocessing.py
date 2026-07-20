@@ -2,9 +2,19 @@ import cv2
 import numpy as np
 
 
-def preprocess_image(image: np.ndarray) -> np.ndarray:
-    resized = resize_for_ocr(image)
+def preprocess_image(image: np.ndarray, profile: str = "current", max_side: int | None = None) -> np.ndarray:
+    resized = resize_for_ocr(image, max_side=max_side)
+    normalized_profile = (profile or "current").strip().lower()
+    if normalized_profile in {"direct", "none"}:
+        return resized
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) == 3 else resized
+    if normalized_profile == "grayscale":
+        return gray
+    if normalized_profile == "contrast":
+        return improve_contrast(gray)
+    if normalized_profile == "minimal":
+        enhanced = improve_contrast(gray)
+        return cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     denoised = cv2.fastNlMeansDenoising(gray, None, h=12, templateWindowSize=7, searchWindowSize=21)
     enhanced = improve_contrast(denoised)
     deskewed = deskew(enhanced)
@@ -18,9 +28,19 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
     )
 
 
-def preprocess_table_region(image: np.ndarray) -> np.ndarray:
-    resized = resize_for_ocr(image, min_width=900)
+def preprocess_table_region(image: np.ndarray, profile: str = "current", max_side: int | None = None) -> np.ndarray:
+    resized = resize_for_ocr(image, min_width=900, max_side=max_side)
+    normalized_profile = (profile or "current").strip().lower()
+    if normalized_profile in {"direct", "none"}:
+        return resized
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) == 3 else resized
+    if normalized_profile == "grayscale":
+        return gray
+    if normalized_profile == "contrast":
+        return improve_contrast(gray)
+    if normalized_profile == "minimal":
+        enhanced = improve_contrast(gray)
+        return cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     enhanced = improve_contrast(gray)
     blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
     _, thresholded = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -28,8 +48,11 @@ def preprocess_table_region(image: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(thresholded, cv2.MORPH_OPEN, kernel)
 
 
-def resize_for_ocr(image: np.ndarray, min_width: int = 1400) -> np.ndarray:
+def resize_for_ocr(image: np.ndarray, min_width: int = 1400, max_side: int | None = None) -> np.ndarray:
     height, width = image.shape[:2]
+    if max_side and max(height, width) > max_side:
+        scale = max_side / max(height, width)
+        return cv2.resize(image, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
     if width >= min_width:
         return image
     scale = min_width / max(width, 1)

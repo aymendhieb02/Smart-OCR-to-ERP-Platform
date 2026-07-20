@@ -28,6 +28,7 @@ from app.services.correction_suggestions import suggest_corrections
 from app.services.duplicate_detector import detect_duplicates
 from app.services.fraud_indicators import detect_fraud_indicators
 from app.services.invoice_validation_report import build_invoice_validation_report
+from app.services.performance_timer import PipelineTimer
 
 
 def process_document_file(
@@ -40,17 +41,25 @@ def process_document_file(
     ocr_mode: str | None = None,
     use_ocr_cache: bool = True,
     refresh_ocr_cache: bool = False,
+    timing_recorder: PipelineTimer | None = None,
 ) -> ProcessInvoiceResponse:
+    timer = timing_recorder
     timings: dict[str, float] = {}
-    stage_started = time.perf_counter()
-    document = load_document(path, original_filename or path.name)
-    timings["file_loading"] = round(time.perf_counter() - stage_started, 4)
-    stage_started = time.perf_counter()
-    engine = ocr_engine or OCREngine(mode=ocr_mode, use_disk_cache=use_ocr_cache, refresh_cache=refresh_ocr_cache)
-    ocr_result = engine.run(document.images, document.embedded_text)
-    timings.update(getattr(engine, "last_timings", {}))
-    timings["ocr"] = round(time.perf_counter() - stage_started, 4)
-    return _process_ocr_document(document, ocr_result, timings=timings, include_preview=include_preview, persist_erp_json=persist_erp_json, ocr_engine=engine)
+    with _timer_stage(timer, "total_pipeline", document=original_filename or path.name):
+        stage_started = time.perf_counter()
+        with _timer_stage(timer, "file_loading", input_type=path.suffix.lower()):
+            document = load_document(path, original_filename or path.name, timing_recorder=timer)
+        timings["file_loading"] = round(time.perf_counter() - stage_started, 4)
+        _set_document_timer_metadata(timer, document)
+        stage_started = time.perf_counter()
+        with _timer_stage(timer, "ocr_engine_initialization", ocr_mode=ocr_mode):
+            engine = ocr_engine or OCREngine(mode=ocr_mode, use_disk_cache=use_ocr_cache, refresh_cache=refresh_ocr_cache, timing_recorder=timer)
+            if ocr_engine is not None:
+                setattr(engine, "timing_recorder", timer)
+        ocr_result = engine.run(document.images, document.embedded_text)
+        timings.update(getattr(engine, "last_timings", {}))
+        timings["ocr"] = round(time.perf_counter() - stage_started, 4)
+        return _process_ocr_document(document, ocr_result, timings=timings, include_preview=include_preview, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
 def process_loaded_document(
@@ -59,28 +68,36 @@ def process_loaded_document(
     ocr_engine: OCREngine | None = None,
     include_preview: bool = True,
     persist_erp_json: bool = False,
+    timing_recorder: PipelineTimer | None = None,
 ) -> ProcessInvoiceResponse:
+    timer = timing_recorder
     engine = ocr_engine or OCREngine()
+    setattr(engine, "timing_recorder", timer)
     timings: dict[str, float] = {}
     stage_started = time.perf_counter()
-    document_preview = generate_document_preview(document) if include_preview else None
+    with _timer_stage(timer, "response_preparation", part="preview_generation"):
+        document_preview = generate_document_preview(document) if include_preview else None
     timings["preview_generation"] = round(time.perf_counter() - stage_started, 4)
     stage_started = time.perf_counter()
     ocr_result = engine.run(document.images, document.embedded_text)
     timings.update(getattr(engine, "last_timings", {}))
     timings["ocr"] = round(time.perf_counter() - stage_started, 4)
-    return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine)
+    return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
-def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None) -> ProcessInvoiceResponse:
-    document_preview = generate_document_preview(document) if include_preview else None
+def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None) -> ProcessInvoiceResponse:
+    timer = timing_recorder
+    with _timer_stage(timer, "response_preparation", part="preview_generation"):
+        document_preview = generate_document_preview(document) if include_preview else None
     if not ocr_result.raw_text:
         raise ValueError("No text could be extracted from the invoice")
 
     stage_started = time.perf_counter()
     layout_analyzer = LayoutAnalyzer(ocr_result.lines)
-    layout_blocks = layout_analyzer.detect_layout_blocks()
-    layout_debug = analyze_document_layout(ocr_result.lines)
+    with _timer_stage(timer, "semantic_block_detection"):
+        layout_blocks = layout_analyzer.detect_layout_blocks()
+    with _timer_stage(timer, "layout_analysis"):
+        layout_debug = analyze_document_layout(ocr_result.lines)
     timings["layout_analysis"] = round(time.perf_counter() - stage_started, 4)
     classification = classify_document(ocr_result.raw_text, ocr_result.lines)
     stage_started = time.perf_counter()
@@ -88,6 +105,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         ocr_result.raw_text,
         ocr_result.lines,
         classification,
+        timing_recorder=timer,
     )
     if ocr_engine and ocr_engine.mode == "balanced" and not extraction_debug.get("fallback_recovery"):
         requested_fallbacks = determine_required_fallbacks(fields=fields, ocr_result=ocr_result, extraction_debug=extraction_debug)
@@ -96,13 +114,16 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             if fallback_lines:
                 ocr_result = _merge_ocr_result(ocr_result, fallback_lines)
                 layout_analyzer = LayoutAnalyzer(ocr_result.lines)
-                layout_blocks = layout_analyzer.detect_layout_blocks()
-                layout_debug = analyze_document_layout(ocr_result.lines)
+                with _timer_stage(timer, "semantic_block_detection", fallback=True):
+                    layout_blocks = layout_analyzer.detect_layout_blocks()
+                with _timer_stage(timer, "layout_analysis", fallback=True):
+                    layout_debug = analyze_document_layout(ocr_result.lines)
                 classification = classify_document(ocr_result.raw_text, ocr_result.lines)
                 fields, candidates, field_confidences, extraction_debug = extract_with_candidates(
                     ocr_result.raw_text,
                     ocr_result.lines,
                     classification,
+                    timing_recorder=timer,
                 )
                 extraction_debug["fallback_recovery"] = {
                     "requested_regions": requested_fallbacks,
@@ -111,12 +132,14 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
                 timings.update(getattr(ocr_engine, "last_timings", {}))
     timings["field_extraction"] = round(time.perf_counter() - stage_started, 4)
     stage_started = time.perf_counter()
-    quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
-    fields = quality_gate.sanitized_fields
+    with _timer_stage(timer, "financial_validation", part="quality_gate"):
+        quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
+        fields = quality_gate.sanitized_fields
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
     field_boxes = build_field_boxes(expanded_fields)
     extraction_debug["layout_analysis"] = layout_debug
-    validation = validate_invoice(fields, ocr_result, classification)
+    with _timer_stage(timer, "financial_validation", part="validate_invoice"):
+        validation = validate_invoice(fields, ocr_result, classification)
     timings["table_extraction"] = round(time.perf_counter() - stage_started, 4)
     table_debug = extraction_debug.setdefault("table_extraction_debug", {})
     table_debug["validated_rows"] = [item.model_dump(mode="json") for item in quality_gate.line_items_validated]
@@ -136,37 +159,45 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         validation.is_valid = False
     all_items = quality_gate.line_items_validated + quality_gate.line_items_needs_review
     business_started = time.perf_counter()
-    row_validation = validate_rows(all_items)
-    row_summary = summarize_rows(row_validation)
-    financial_reasoning = reason_financials(
-        fields,
-        all_items,
-        document_type=classification.document_type,
-        shipping=_expanded_number(expanded_fields, "shipping_amount"),
-        discount=_expanded_number(expanded_fields, "discount_amount"),
-        stamp_tax=_expanded_number(expanded_fields, "stamp_tax_amount"),
-    )
+    with _timer_stage(timer, "financial_validation", part="rows_and_financials"):
+        row_validation = validate_rows(all_items)
+        row_summary = summarize_rows(row_validation)
+        financial_reasoning = reason_financials(
+            fields,
+            all_items,
+            document_type=classification.document_type,
+            shipping=_expanded_number(expanded_fields, "shipping_amount"),
+            discount=_expanded_number(expanded_fields, "discount_amount"),
+            stamp_tax=_expanded_number(expanded_fields, "stamp_tax_amount"),
+        )
     layout_confidence = _average([block.confidence for block in layout_blocks])
     table_confidence = _average([table.get("confidence") for table in layout_debug.get("tables", [])])
     field_confidence = _average(list(field_confidences.values()))
-    base_confidence = calculate_confidence(
-        ocr=ocr_result.confidence,
-        layout=layout_confidence,
-        table=table_confidence,
-        fields=field_confidence,
-        financial=financial_reasoning["financial_consistency_score"],
-        validation=row_summary["validation_score"],
-    )
-    erp_readiness = assess_erp_readiness(fields, row_summary=row_summary, financial=financial_reasoning, confidence=base_confidence["overall_confidence"])
-    confidence_breakdown = calculate_confidence(
-        ocr=ocr_result.confidence,
-        layout=layout_confidence,
-        table=table_confidence,
-        fields=field_confidence,
-        financial=financial_reasoning["financial_consistency_score"],
-        validation=row_summary["validation_score"],
-        erp=erp_readiness["erp_ready_score"],
-    )
+    with _timer_stage(timer, "confidence_computation", pass_name="base"):
+        base_confidence = calculate_confidence(
+            ocr=ocr_result.confidence,
+            layout=layout_confidence,
+            table=table_confidence,
+            fields=field_confidence,
+            financial=financial_reasoning["financial_consistency_score"],
+            validation=row_summary["validation_score"],
+            validation_status=validation.status,
+        )
+    with _timer_stage(timer, "erp_readiness"):
+        erp_readiness = assess_erp_readiness(fields, row_summary=row_summary, financial=financial_reasoning, confidence=base_confidence["overall_confidence"])
+    with _timer_stage(timer, "confidence_computation", pass_name="final"):
+        confidence_breakdown = calculate_confidence(
+            ocr=ocr_result.confidence,
+            layout=layout_confidence,
+            table=table_confidence,
+            fields=field_confidence,
+            financial=financial_reasoning["financial_consistency_score"],
+            validation=row_summary["validation_score"],
+            erp=erp_readiness["erp_ready_score"],
+            validation_status=validation.status,
+            missing_required_fields=erp_readiness["missing_fields"],
+            erp_ready=erp_readiness["ready"],
+        )
     correction_suggestions = suggest_corrections(fields)
     duplicate_detection = detect_duplicates(fields)
     fraud = detect_fraud_indicators(fields, financial=financial_reasoning, duplicate=duplicate_detection, validation={"missing_fields": erp_readiness["missing_fields"]})
@@ -192,18 +223,19 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         fraud=fraud,
     )
     timings["business_reasoning"] = round(time.perf_counter() - business_started, 4)
-    validation_explanation = build_validation_explanation(validation)
-    erp_json = build_erp_json(
-        fields=fields,
-        validation=validation,
-        source_file=document.source_file,
-        ocr_engine=ocr_result.engine,
-        confidence=ocr_result.confidence,
-        document_type=classification.document_type,
-        field_confidences=field_confidences,
-        languages=["fr", "en", "ar"],
-        expanded_fields=expanded_fields,
-    )
+    with _timer_stage(timer, "response_preparation", part="erp_payload"):
+        validation_explanation = build_validation_explanation(validation)
+        erp_json = build_erp_json(
+            fields=fields,
+            validation=validation,
+            source_file=document.source_file,
+            ocr_engine=ocr_result.engine,
+            confidence=ocr_result.confidence,
+            document_type=classification.document_type,
+            field_confidences=field_confidences,
+            languages=["fr", "en", "ar"],
+            expanded_fields=expanded_fields,
+        )
     erp_json.quality["validation_explanation"] = validation_explanation.model_dump(mode="json")
     erp_json.quality.update({
         "overall_confidence": confidence_breakdown["overall_confidence"],
@@ -213,67 +245,72 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         "fraud_indicators": fraud,
     })
     review_display_fields = fields.model_copy(update={"line_items": all_items})
-    dynamic_tables, extraction_layer, erp_layer = build_dynamic_review_payload(
-        fields=review_display_fields,
-        expanded_fields=expanded_fields,
-        layout_blocks=layout_blocks,
-        ocr_blocks=ocr_result.lines,
-        validation=validation,
-        erp_json=erp_json,
-    )
+    with _timer_stage(timer, "response_preparation", part="dynamic_review_payload"):
+        dynamic_tables, extraction_layer, erp_layer = build_dynamic_review_payload(
+            fields=review_display_fields,
+            expanded_fields=expanded_fields,
+            layout_blocks=layout_blocks,
+            ocr_blocks=ocr_result.lines,
+            validation=validation,
+            erp_json=erp_json,
+        )
     if persist_erp_json:
-        write_erp_json(erp_json)
-        write_invoice_validation_report(invoice_report, document.source_file, fields.invoice_number)
+        with _timer_stage(timer, "result_serialization", part="erp_disk_write"):
+            write_erp_json(erp_json)
+            write_invoice_validation_report(invoice_report, document.source_file, fields.invoice_number)
     validated_erp_json = build_validated_erp_json(erp_json, quality_gate.validation_report)
     validated_erp_json["erp_readiness"] = erp_readiness
     validated_erp_json["erp_export_allowed"] = erp_readiness["ready"]
     erp_export = map_to_flat_erp(erp_json)
     erp_export.source_payload = validated_erp_json
     extraction_debug["stage_timings"] = timings
-    response = ProcessInvoiceResponse(
-        extracted_text=ocr_result.raw_text,
-        document_preview=document_preview,
-        layout_blocks=layout_blocks,
-        field_boxes=field_boxes,
-        ocr_blocks=ocr_result.lines,
-        document_classification=classification,
-        detected_fields=fields,
-        expanded_fields=expanded_fields,
-        field_confidences=field_confidences,
-        extraction_debug=extraction_debug,
-        dynamic_tables=dynamic_tables,
-        extraction_layer=extraction_layer,
-        erp_layer=erp_layer,
-        validation=validation,
-        validation_explanation=validation_explanation,
-        erp_json=erp_json,
-        erp_export=erp_export,
-        validated_erp_json=validated_erp_json,
-        review_candidates=quality_gate.review_candidates,
-        rejected_candidates=quality_gate.rejected_candidates,
-        all_ocr_blocks=ocr_result.lines,
-        table_candidates=layout_debug.get("tables", []),
-        line_items_validated=quality_gate.line_items_validated,
-        line_items_needs_review=quality_gate.line_items_needs_review,
-        all_line_items=quality_gate.line_items_validated + quality_gate.line_items_needs_review,
-        validation_report=quality_gate.validation_report,
-        row_validation=row_validation,
-        financial_reasoning=financial_reasoning,
-        confidence_breakdown=confidence_breakdown,
-        erp_readiness=erp_readiness,
-        invoice_validation_report=invoice_report,
-        correction_suggestions=correction_suggestions,
-        duplicate_detection=duplicate_detection,
-        fraud_indicators=fraud,
-    )
-    apply_public_bbox_contract(response)
+    with _timer_stage(timer, "response_preparation", part="pydantic_response"):
+        response = ProcessInvoiceResponse(
+            extracted_text=ocr_result.raw_text,
+            document_preview=document_preview,
+            layout_blocks=layout_blocks,
+            field_boxes=field_boxes,
+            ocr_blocks=ocr_result.lines,
+            document_classification=classification,
+            detected_fields=fields,
+            expanded_fields=expanded_fields,
+            field_confidences=field_confidences,
+            extraction_debug=extraction_debug,
+            dynamic_tables=dynamic_tables,
+            extraction_layer=extraction_layer,
+            erp_layer=erp_layer,
+            validation=validation,
+            validation_explanation=validation_explanation,
+            erp_json=erp_json,
+            erp_export=erp_export,
+            validated_erp_json=validated_erp_json,
+            review_candidates=quality_gate.review_candidates,
+            rejected_candidates=quality_gate.rejected_candidates,
+            all_ocr_blocks=ocr_result.lines,
+            table_candidates=layout_debug.get("tables", []),
+            line_items_validated=quality_gate.line_items_validated,
+            line_items_needs_review=quality_gate.line_items_needs_review,
+            all_line_items=quality_gate.line_items_validated + quality_gate.line_items_needs_review,
+            validation_report=quality_gate.validation_report,
+            row_validation=row_validation,
+            financial_reasoning=financial_reasoning,
+            confidence_breakdown=confidence_breakdown,
+            erp_readiness=erp_readiness,
+            invoice_validation_report=invoice_report,
+            correction_suggestions=correction_suggestions,
+            duplicate_detection=duplicate_detection,
+            fraud_indicators=fraud,
+        )
+        apply_public_bbox_contract(response)
     timings["public_boxes_count"] = count_public_ocr_boxes(response)
     timings["bbox_loss_stage"] = bbox_loss_stage(response)
     response.extraction_debug["stage_timings"] = timings
     serialization_started = time.perf_counter()
-    response.model_dump(mode="json")
+    with _timer_stage(timer, "result_serialization", part="model_dump"):
+        response.model_dump(mode="json")
     timings["report_serialization"] = round(time.perf_counter() - serialization_started, 4)
     response.extraction_debug["stage_timings"] = timings
+    _set_result_timer_metadata(timer, response, candidates)
     return response
 
 
@@ -314,3 +351,50 @@ def _expanded_number(expanded_fields: dict, field_name: str) -> float | None:
     detail = expanded_fields.get(field_name)
     value = getattr(detail, "value", None) if detail else None
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _timer_stage(timing_recorder: PipelineTimer | None, name: str, **metadata):
+    if timing_recorder is None:
+        return _noop_stage()
+    return timing_recorder.stage(name, **metadata)
+
+
+def _set_document_timer_metadata(timer: PipelineTimer | None, document) -> None:
+    if timer is None:
+        return
+    dimensions = [
+        {"width": int(image.shape[1]), "height": int(image.shape[0])}
+        for image in getattr(document, "images", []) or []
+        if getattr(image, "shape", None) is not None and len(image.shape) >= 2
+    ]
+    timer.set_metadata(
+        document=getattr(document, "source_file", None),
+        filename=getattr(document, "source_file", None),
+        input_type=getattr(document, "extension", None),
+        page_count=len(getattr(document, "images", []) or []),
+        image_dimensions=dimensions,
+    )
+
+
+def _set_result_timer_metadata(timer: PipelineTimer | None, response: ProcessInvoiceResponse, candidates: dict[str, list]) -> None:
+    if timer is None:
+        return
+    timings = response.extraction_debug.get("stage_timings", {}) if response.extraction_debug else {}
+    timer.set_metadata(
+        ocr_engine=response.erp_json.metadata.ocr_engine if response.erp_json else None,
+        ocr_mode=timings.get("ocr_mode"),
+        cache_hit=bool(timings.get("disk_cache_hit") or timings.get("memory_cache_hits")),
+        ocr_blocks=len(response.ocr_blocks),
+        layout_blocks=len(response.layout_blocks),
+        candidate_count=sum(len(values) for values in candidates.values()),
+        extracted_lines=len(response.all_line_items or response.detected_fields.line_items),
+        validation_status=response.validation.status if response.validation else None,
+    )
+
+
+class _noop_stage:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False

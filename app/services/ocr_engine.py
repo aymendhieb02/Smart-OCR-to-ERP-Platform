@@ -15,6 +15,7 @@ import numpy as np
 
 from app.core.config import settings
 from app.core.schemas import BoundingBox, OCRLine, OCRResult
+from app.services.ocr_profiles import effective_ocr_config, ocr_configuration_hash
 from app.services.preprocessing import preprocess_image, preprocess_table_region
 from app.services.table_regions import OCRRegion, build_ocr_regions
 from app.utils.helpers import normalize_text
@@ -27,10 +28,11 @@ _UNSUPPORTED_BBOX_SHAPES: set[str] = set()
 
 
 class OCREngine:
-    def __init__(self, mode: str | None = None, *, use_disk_cache: bool = True, refresh_cache: bool = False) -> None:
+    def __init__(self, mode: str | None = None, *, use_disk_cache: bool = True, refresh_cache: bool = False, timing_recorder=None) -> None:
         self.mode = _normalize_ocr_mode(mode or settings.ocr_mode)
         self.use_disk_cache = use_disk_cache and settings.enable_ocr_disk_cache
         self.refresh_cache = refresh_cache
+        self.timing_recorder = timing_recorder
         self.last_timings: dict[str, float] = {}
         self._ocr_cache: dict[str, list[dict]] = {}
         self.cache_hits = 0
@@ -67,10 +69,11 @@ class OCREngine:
                         lines.extend(fallback_lines)
                         engine_name = "Tesseract"
 
-        raw_text = normalize_text("\n".join(line.text for line in lines))
-        lines = _dedupe_ocr_lines(lines)
-        confidence_values = [line.confidence for line in lines if line.confidence is not None]
-        confidence = round(sum(confidence_values) / len(confidence_values), 3) if confidence_values else None
+        with _timer_stage(self.timing_recorder, "ocr_postprocessing", raw_line_count=len(lines)):
+            raw_text = normalize_text("\n".join(line.text for line in lines))
+            lines = _dedupe_ocr_lines(lines)
+            confidence_values = [line.confidence for line in lines if line.confidence is not None]
+            confidence = round(sum(confidence_values) / len(confidence_values), 3) if confidence_values else None
         self.last_timings["ocr_total"] = round(time.perf_counter() - started, 4)
         self.last_timings["ocr_engine_used"] = engine_name
         self.last_timings["ocr_mode"] = self.mode
@@ -86,7 +89,8 @@ class OCREngine:
         started = time.perf_counter()
         cache_info = getattr(_get_paddle_ocr, "cache_info", None)
         cache_before = cache_info() if cache_info else None
-        paddle = _get_paddle_ocr()
+        with _timer_stage(self.timing_recorder, "ocr_engine_initialization", engine="PaddleOCR", lazy=True):
+            paddle = _get_paddle_instance()
         cache_after = cache_info() if cache_info else None
         self.last_timings["paddle_initialization"] = round(time.perf_counter() - started, 4) if cache_after and cache_before and cache_after.misses > cache_before.misses else 0.0
         lines: list[OCRLine] = []
@@ -120,7 +124,7 @@ class OCREngine:
         if not images or not region_names:
             return []
         started = time.perf_counter()
-        paddle = _get_paddle_ocr()
+        paddle = _get_paddle_instance()
         requested = set(region_names)
         lines: list[OCRLine] = []
         for page_number, image in enumerate(images, start=1):
@@ -151,35 +155,38 @@ class OCREngine:
     def _run_paddle_region(self, paddle, region: OCRRegion, page_number: int, *, source: str) -> tuple[list[OCRLine], float, bool]:
         region_started = time.perf_counter()
         preprocess_started = time.perf_counter()
-        processed = _preprocess_for_region(region)
+        with _timer_stage(self.timing_recorder, "preprocessing", region=region.name, page_number=page_number):
+            processed = _preprocess_for_region(region)
         preprocess_elapsed = time.perf_counter() - preprocess_started
         preprocessing_key = "full_page_preprocessing" if region.name == "full_page" else "fallback_preprocessing"
         self.last_timings[preprocessing_key] = round(self.last_timings.get(preprocessing_key, 0.0) + preprocess_elapsed, 4)
         self.last_timings["preprocessing"] = self.last_timings.get("preprocessing", 0.0) + preprocess_elapsed
 
-        cache_key = _ocr_cache_key(processed, region.image, region.name, page_number, self.mode, region.coordinates)
-        cached_items = self._ocr_cache.get(cache_key)
-        from_memory = cached_items is not None
-        if cached_items is not None and not _cache_has_usable_geometry(cached_items):
-            self.last_timings["ocr_cache_source"] = "memory_rejected_zero_bbox"
-            self.last_timings["disk_cache_invalidated_reason"] = "memory cache had text but zero bboxes"
-            self._ocr_cache.pop(cache_key, None)
-            cached_items = None
-            from_memory = False
-        if cached_items is not None:
-            self.cache_hits += 1
-            self.memory_cache_hits += 1
-            self.last_timings["ocr_cache_source"] = "memory"
-        else:
-            cached_items = self._read_disk_cache(cache_key)
+        with _timer_stage(self.timing_recorder, "ocr_cache_lookup", region=region.name, page_number=page_number):
+            cache_key = _ocr_cache_key(processed, region.image, region.name, page_number, self.mode, region.coordinates)
+            cached_items = self._ocr_cache.get(cache_key)
+            from_memory = cached_items is not None
+            if cached_items is not None and not _cache_has_usable_geometry(cached_items):
+                self.last_timings["ocr_cache_source"] = "memory_rejected_zero_bbox"
+                self.last_timings["disk_cache_invalidated_reason"] = "memory cache had text but zero bboxes"
+                self._ocr_cache.pop(cache_key, None)
+                cached_items = None
+                from_memory = False
             if cached_items is not None:
                 self.cache_hits += 1
-                self.disk_cache_hits += 1
-                self._ocr_cache[cache_key] = cached_items
-                self.last_timings["ocr_cache_source"] = "disk"
+                self.memory_cache_hits += 1
+                self.last_timings["ocr_cache_source"] = "memory"
+            else:
+                cached_items = self._read_disk_cache(cache_key)
+                if cached_items is not None:
+                    self.cache_hits += 1
+                    self.disk_cache_hits += 1
+                    self._ocr_cache[cache_key] = cached_items
+                    self.last_timings["ocr_cache_source"] = "disk"
         if cached_items is None:
             inference_started = time.perf_counter()
-            result = _run_paddle_prediction(paddle, processed)
+            with _timer_stage(self.timing_recorder, "ocr_execution", region=region.name, page_number=page_number, engine="PaddleOCR"):
+                result = _run_paddle_prediction(paddle, processed)
             inference_elapsed = time.perf_counter() - inference_started
             inference_key = "full_page_ocr_inference" if region.name == "full_page" else "fallback_ocr_inference"
             self.last_timings[inference_key] = round(self.last_timings.get(inference_key, 0.0) + inference_elapsed, 4)
@@ -273,30 +280,40 @@ class OCREngine:
         if not self.use_disk_cache:
             return
         try:
-            settings.ocr_cache_dir.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "schema_version": OCR_CACHE_SCHEMA_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "engine": "PaddleOCR",
-                "ocr_mode": self.mode,
-                "ocr_cache_fingerprint": _paddle_fingerprint(),
-                "preprocessing_version": PREPROCESSING_VERSION,
-                "region": region.name,
-                "region_coordinates": region.coordinates,
-                "image_shape": list(processed.shape),
-                "coordinate_mapping": _coordinate_mapping(region, processed),
-                "geometry_status": "available" if _items_with_bbox(items) else "unavailable_from_engine",
-                "items_count": len(items),
-                "items_with_bbox": _items_with_bbox(items),
-                "items": [_cache_item(item) for item in items],
-            }
-            (settings.ocr_cache_dir / f"{cache_key}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with _timer_stage(self.timing_recorder, "cache_write", region=region.name):
+                settings.ocr_cache_dir.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "schema_version": OCR_CACHE_SCHEMA_VERSION,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "engine": "PaddleOCR",
+                    "ocr_mode": self.mode,
+                    "ocr_cache_fingerprint": _paddle_fingerprint(),
+                    "preprocessing_version": PREPROCESSING_VERSION,
+                    "region": region.name,
+                    "region_coordinates": region.coordinates,
+                    "image_shape": list(processed.shape),
+                    "coordinate_mapping": _coordinate_mapping(region, processed),
+                    "geometry_status": "available" if _items_with_bbox(items) else "unavailable_from_engine",
+                    "items_count": len(items),
+                    "items_with_bbox": _items_with_bbox(items),
+                    "items": [_cache_item(item) for item in items],
+                }
+                (settings.ocr_cache_dir / f"{cache_key}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except Exception as exc:
             logger.debug("OCR disk cache write failed: %s", exc)
 
     def _reset_run_metrics(self) -> None:
+        ocr_config = effective_ocr_config()
         self.last_timings = {
             "ocr_mode": self.mode,
+            "ocr_profile": ocr_config["ocr_profile"],
+            "detector_model": ocr_config["detector"],
+            "recognizer_model": ocr_config["recognizer"],
+            "cpu_threads": ocr_config["cpu_threads"],
+            "input_max_side": ocr_config["input_max_side"],
+            "preprocessing_profile": ocr_config["preprocessing_profile"],
+            "mkldnn": ocr_config["enable_mkldnn"],
+            "gpu": ocr_config["use_gpu"],
             "ocr_engine_used": None,
             "total_paddle_calls": 0,
             "fallback_region_count": 0,
@@ -342,10 +359,13 @@ def _build_tesseract_line(parts: list[str], confidences: list[float], page_numbe
 
 
 def _preprocess_for_region(region: OCRRegion) -> np.ndarray:
+    ocr_config = effective_ocr_config()
+    profile = ocr_config["preprocessing_profile"]
+    max_side = ocr_config["input_max_side"]
     if region.name == "full_page":
-        processed = preprocess_image(region.image)
+        processed = preprocess_image(region.image, profile=profile, max_side=max_side)
     else:
-        processed = preprocess_table_region(region.image)
+        processed = preprocess_table_region(region.image, profile=profile, max_side=max_side)
     return _ensure_color_image(processed)
 
 
@@ -380,7 +400,24 @@ def _ocr_cache_key(
 
 
 def _paddle_fingerprint() -> str:
-    return "paddleocr-lang-en-no-orientation"
+    ocr_config = effective_ocr_config()
+    payload = {
+        "lang": "en",
+        "enable_mkldnn": ocr_config["enable_mkldnn"],
+        "cpu_threads": ocr_config["cpu_threads"],
+        "use_gpu": ocr_config["use_gpu"],
+        "ocr_version": settings.paddle_ocr_version,
+        "det_model": ocr_config["detector"],
+        "rec_model": ocr_config["recognizer"],
+        "det_limit_side_len": settings.paddle_text_det_limit_side_len,
+        "input_max_side": ocr_config["input_max_side"],
+        "rec_batch_size": settings.paddle_text_recognition_batch_size,
+        "preprocessing_profile": ocr_config["preprocessing_profile"],
+        "orientation": False,
+        "unwarping": False,
+        "textline_orientation": False,
+    }
+    return json.dumps(payload, sort_keys=True)
 
 
 def _item_with_page_bbox(item: dict, region: OCRRegion, page_number: int, processed: np.ndarray, source: str) -> dict:
@@ -841,25 +878,55 @@ def _extract_paddle_bbox(value) -> BoundingBox | None:
     return normalize_paddle_bbox(value)
 
 
-@lru_cache(maxsize=1)
-def _get_paddle_ocr():
-    os.environ.setdefault("FLAGS_use_mkldnn", "0")
+@lru_cache(maxsize=4)
+def _get_paddle_ocr(_config_hash: str | None = None):
+    ocr_config = effective_ocr_config()
+    os.environ["FLAGS_use_mkldnn"] = "1" if ocr_config["enable_mkldnn"] else "0"
+    if ocr_config["cpu_threads"]:
+        os.environ["CPU_NUM"] = str(ocr_config["cpu_threads"])
+        os.environ["OMP_NUM_THREADS"] = str(ocr_config["cpu_threads"])
     os.environ.setdefault("FLAGS_enable_pir_api", "0")
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     from paddleocr import PaddleOCR
 
     try:
+        kwargs = {
+            "lang": "en",
+            "enable_mkldnn": ocr_config["enable_mkldnn"],
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+        }
+        optional = {
+            "cpu_threads": ocr_config["cpu_threads"],
+            "ocr_version": settings.paddle_ocr_version,
+            "text_detection_model_name": ocr_config["detector"],
+            "text_recognition_model_name": ocr_config["recognizer"],
+            "text_det_limit_side_len": settings.paddle_text_det_limit_side_len,
+            "text_recognition_batch_size": settings.paddle_text_recognition_batch_size,
+        }
+        kwargs.update({key: value for key, value in optional.items() if value is not None})
+        if ocr_config["use_gpu"]:
+            kwargs["use_gpu"] = True
+        return PaddleOCR(**kwargs)
+    except ValueError as exc:
+        if "Unknown argument" not in str(exc):
+            raise
         return PaddleOCR(
             lang="en",
-            enable_mkldnn=False,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
         )
-    except ValueError as exc:
-        if "Unknown argument" not in str(exc):
+
+
+def _get_paddle_instance():
+    try:
+        return _get_paddle_ocr(ocr_configuration_hash())
+    except TypeError as exc:
+        if "positional" not in str(exc) and "argument" not in str(exc):
             raise
-        return PaddleOCR(lang="en")
+        return _get_paddle_ocr()
 
 
 def _run_paddle_prediction(paddle, processed):
@@ -871,3 +938,17 @@ def _run_paddle_prediction(paddle, processed):
         if "unexpected keyword argument 'cls'" not in str(exc):
             raise
         return paddle.ocr(processed)
+
+
+def _timer_stage(timing_recorder, name: str, **metadata):
+    if timing_recorder is None:
+        return _noop_stage()
+    return timing_recorder.stage(name, **metadata)
+
+
+class _noop_stage:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
