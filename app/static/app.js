@@ -996,11 +996,37 @@ function renderFinancialChecks(host) {
 }
 
 function renderCorrectionSuggestions(host) {
+  const assistant = lastResponse.review_assistant || {};
+  const assistantIssues = assistant.issues || [];
   const suggestions = lastResponse.correction_suggestions || [];
   const reviewCandidates = lastResponse.review_candidates || {};
   const candidateCards = Object.entries(reviewCandidates).flatMap(([field, candidates]) => (candidates || []).map((candidate) => ({ field, candidate })));
   host.innerHTML = `
     <div class="candidate-list">
+      ${assistantIssues.length ? `
+        <article class="candidate-card">
+          <header><strong>AI Review Assistant</strong><span>${formatConfidence(assistant.confidence)}</span></header>
+          <div>${escapeHtml(assistant.summary || "Review assistant generated guidance.")}</div>
+          <div>ERP impact: ${escapeHtml(assistant.erp_impact || "-")}</div>
+          <div class="note">${escapeHtml(assistant.reviewer_control || "Suggestions are advisory only.")}</div>
+        </article>
+        ${assistantIssues.map((issue) => `
+          <article class="candidate-card">
+            <header><strong>${escapeHtml(issue.title || issue.type || "Review issue")}</strong><span>${formatConfidence(issue.confidence)}</span></header>
+            <div>Problem: ${escapeHtml(issue.suspected_problem || "-")}</div>
+            <div>Explanation: ${escapeHtml(issue.explanation || "-")}</div>
+            <div>Suggested correction: ${escapeHtml(displayValue(issue.suggested_correction))}</div>
+            <div>ERP impact: ${escapeHtml(issue.erp_impact || "-")}</div>
+            ${(issue.evidence || []).length ? `<div class="candidate-evidence">${(issue.evidence || []).slice(0, 5).map((item) => `
+              <div class="note">
+                #${escapeHtml(String(item.rank || "-"))}: ${escapeHtml(displayValue(item.value))}
+                ${item.confidence !== undefined && item.confidence !== null ? `(${escapeHtml(formatConfidence(item.confidence))})` : ""}
+                ${item.reason ? ` - ${escapeHtml(displayValue(item.reason))}` : ""}
+              </div>
+            `).join("")}</div>` : ""}
+          </article>
+        `).join("")}
+      ` : '<div class="note success-note">AI Review Assistant found no extra review issues.</div>'}
       ${suggestions.length ? suggestions.map((suggestion, index) => `
         <article class="candidate-card">
           <header><strong>${escapeHtml(suggestion.field || "Suggestion")}</strong><span>${formatConfidence(suggestion.confidence)}</span></header>
@@ -1376,7 +1402,8 @@ function redrawPreview() {
   image.style.width = `${displayWidth}px`;
   stage.style.width = `${displayWidth}px`;
   stage.style.height = `${displayHeight}px`;
-  stage.querySelectorAll(".overlay-box, .overlay-debug-panel").forEach((box) => box.remove());
+  stage.querySelectorAll(".overlay-box").forEach((box) => box.remove());
+  previewCanvas.querySelectorAll(":scope > .overlay-debug-panel").forEach((panel) => panel.remove());
 
   const scaleX = displayWidth / firstPage.width;
   const scaleY = displayHeight / firstPage.height;
@@ -1401,7 +1428,7 @@ function redrawPreview() {
       .filter((row) => normalizePage(row.page) === firstPage.page)
       .forEach((row) => addBox(stage, row.bbox, scaleX, scaleY, "row", row.label, row.confidence, row, counts, "row"));
   }
-  renderOverlayDiagnostics(stage, firstPage, displayWidth, displayHeight, counts);
+  renderOverlayDiagnostics(previewCanvas, firstPage, displayWidth, displayHeight, counts);
   window.__REVIEW_DEBUG__.overlayCounts = { ...lastResponse.overlay_counts, visible: counts };
 }
 

@@ -397,5 +397,6 @@ class ProcessInvoiceResponse(BaseModel):
     erp_readiness: dict[str, Any] = Field(default_factory=dict)
     invoice_validation_report: dict[str, Any] = Field(default_factory=dict)
     correction_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    review_assistant: dict[str, Any] = Field(default_factory=dict)
     duplicate_detection: dict[str, Any] = Field(default_factory=dict)
     fraud_indicators: dict[str, Any] = Field(default_factory=dict)

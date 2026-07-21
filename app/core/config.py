@@ -25,6 +25,21 @@ class Settings(BaseSettings):
     ocr_preprocessing_profile: str = "current"
     ocr_input_max_side: int | None = 1600
     table_reconstruction_profile: str = "p3_stable"
+    enable_llm_resolver: bool = False
+    llm_resolver_mode: str = "advisory"
+    llm_resolver_model: str = "qwen2.5-coder:7b"
+    llm_resolver_prompt_version: str = "hybrid_prompt_v1"
+    llm_resolver_url: str = "http://localhost:11434/api/generate"
+    llm_resolver_timeout_seconds: float = 20.0
+    llm_resolver_confidence_threshold: float = 0.78
+    llm_resolver_acceptance_threshold: float = 0.85
+    llm_resolver_max_candidates: int = 8
+    llm_resolver_max_evidence_blocks: int = 8
+    llm_resolver_max_evidence_lines: int = 40
+    llm_resolver_max_evidence_characters: int = 6000
+    llm_resolver_max_table_rows: int = 12
+    llm_resolver_auto_apply_safe_corrections: bool = False
+    llm_resolver_cache_dir: Path = Path("outputs/cache/llm")
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="INVOICE_OCR_")
 

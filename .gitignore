@@ -16,6 +16,7 @@ app/static/previews/
 app/static/uploads/
 final_delivery_outputs/
 *.zip
+*.rar
 *.log
 server-*.err.log
 server-*.out.log
