@@ -136,6 +136,54 @@ def test_fixed_document_selection_is_persisted(monkeypatch, tmp_path: Path) -> N
     assert (tmp_path / "run" / "selected_documents.json").exists()
 
 
+def test_verified_10_run_uses_locked_selection(monkeypatch, tmp_path: Path) -> None:
+    docs = [make_document(tmp_path, f"{index:02d}_invoice.png") for index in range(1, 11)]
+    payload = {
+        "documents": [
+            {"filename": doc.filename, "document_id": Path(doc.filename).stem}
+            for doc in docs
+        ]
+    }
+    (tmp_path / "selected_verified_10_documents.json").write_text(json.dumps(payload), encoding="utf-8")
+    args = type("Args", (), {
+        "benchmark_root": str(tmp_path),
+        "dataset": None,
+        "max_documents": 10,
+        "resume": False,
+        "run_id": "hybrid_v3_verified_10doc_01",
+    })()
+    monkeypatch.setattr(bench, "load_manifest_documents", lambda root: docs)
+
+    selected = bench.load_or_select_documents(args, tmp_path / "run")
+
+    assert selected == docs
+    selection = json.loads((tmp_path / "run" / "selected_documents.json").read_text(encoding="utf-8"))
+    assert selection["selection_policy"] == "selected_verified_10_documents"
+
+
+def test_verified_10_prerun_blocks_incomplete_labels(monkeypatch, tmp_path: Path) -> None:
+    docs = [make_document(tmp_path, f"{index:02d}_invoice.png") for index in range(1, 11)]
+    for doc in docs:
+        doc.label_path.write_text(json.dumps({"verification_status": "draft", "verified_by_human": False}), encoding="utf-8")
+    (tmp_path / "selected_verified_10_documents.json").write_text(json.dumps({
+        "documents": [{"filename": doc.filename} for doc in docs]
+    }), encoding="utf-8")
+    args = type("Args", (), {
+        "benchmark_root": str(tmp_path),
+        "run_id": "hybrid_v3_verified_10doc_01",
+        "model": "qwen2.5-coder:7b",
+        "mode": "advisory",
+    })()
+    monkeypatch.setattr(bench, "load_manifest_documents", lambda root: docs)
+    env_status = {"ready": True, "model_installed": True, "cache_directory_writable": True}
+
+    result = bench.validate_verified_10_prerun(args, tmp_path / "run", ("hybrid_prompt_v3",), env_status)
+
+    assert result["ready"] is False
+    assert result["checks"]["all_10_labels_verified"] is False
+    assert len(result["incomplete_documents"]) == 10
+
+
 def test_report_generation_handles_partial_prompt_runs(tmp_path: Path) -> None:
     artifact = {
         "status": "success",

@@ -20,6 +20,7 @@ from app.services.ocr_engine import OCREngine
 from app.services.pipeline_runner import process_document_file
 from scripts.manual_benchmark_utils import (
     DEFAULT_BENCHMARK_ROOT,
+    accuracy_claims_allowed_for_labels,
     compare_prediction_to_label,
     scalar_field_correct,
     line_items_from_response,
@@ -98,6 +99,12 @@ def main() -> None:
         raise SystemExit("Ollama hybrid benchmark refused: environment is not ready. Run --check-env for details.")
 
     prompt_versions = parse_prompt_versions(args)
+    pre_run = validate_verified_10_prerun(args, run_root, prompt_versions, env_status)
+    if pre_run.get("phase_2_8_mode"):
+        write_json(run_root / "verified_10doc_pre_run_validation.json", pre_run)
+        write_verified_10doc_pre_run_report(run_root, pre_run)
+        if not pre_run["ready"]:
+            raise SystemExit("Verified 10-document benchmark refused. See verified_10doc_pre_run_validation.json and verified_10doc_pre_run_validation.md.")
     if args.report_only:
         startup_log(run_root, "Report-only generation started", {"prompt_versions": prompt_versions})
         generate_reports(run_root, prompt_versions)
@@ -294,19 +301,35 @@ def select_difficult_documents(args: argparse.Namespace):
     return [item[2] for item in scored[: max(1, args.max_documents)]]
 
 
+def is_verified_10_run(args: argparse.Namespace) -> bool:
+    run_id = str(getattr(args, "run_id", "") or "").lower()
+    return "verified_10" in run_id or "verified-10" in run_id
+
+
+def selected_verified_10_documents(benchmark_root: Path):
+    selected_path = benchmark_root / "selected_verified_10_documents.json"
+    if not selected_path.exists():
+        return []
+    payload = json.loads(selected_path.read_text(encoding="utf-8"))
+    all_documents = load_manifest_documents(benchmark_root)
+    by_filename = {document.filename: document for document in all_documents}
+    return [by_filename[item["filename"]] for item in payload.get("documents", []) if item.get("filename") in by_filename]
+
+
 def load_or_select_documents(args: argparse.Namespace, run_root: Path):
     selected_path = run_root / "selected_documents.json"
-    all_documents = load_manifest_documents(Path(args.benchmark_root).resolve())
+    benchmark_root = Path(args.benchmark_root).resolve()
+    all_documents = load_manifest_documents(benchmark_root)
     by_filename = {document.filename: document for document in all_documents}
     if selected_path.exists() and args.resume:
         payload = json.loads(selected_path.read_text(encoding="utf-8"))
         documents = [by_filename[item["filename"]] for item in payload.get("documents", []) if item.get("filename") in by_filename]
         if documents:
             return documents
-    documents = select_difficult_documents(args)
+    documents = selected_verified_10_documents(benchmark_root) if is_verified_10_run(args) else select_difficult_documents(args)
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "selection_policy": "fixed_phase_2_3_2_difficult_documents",
+        "selection_policy": "selected_verified_10_documents" if is_verified_10_run(args) else "fixed_phase_2_3_2_difficult_documents",
         "documents": [
             {
                 "document_id": Path(document.filename).stem,
@@ -320,6 +343,90 @@ def load_or_select_documents(args: argparse.Namespace, run_root: Path):
     }
     write_json(selected_path, payload)
     return documents
+
+
+def validate_verified_10_prerun(args: argparse.Namespace, run_root: Path, prompt_versions: tuple[str, ...], env_status: dict[str, Any]) -> dict[str, Any]:
+    phase_mode = is_verified_10_run(args)
+    if not phase_mode:
+        return {"phase_2_8_mode": False, "ready": True}
+    benchmark_root = Path(args.benchmark_root).resolve()
+    documents = selected_verified_10_documents(benchmark_root)
+    labels = [load_label_or_empty(document.label_path) for document in documents]
+    quality_rows = [validate_verified_label_quality(label, label_path=Path("labels") / document.label_path.name) for document, label in zip(documents, labels)]
+    expected_ids = [Path(document.filename).stem for document in documents]
+    checks = {
+        "ollama_ready": bool(env_status.get("ready")),
+        "model_installed": bool(env_status.get("model_installed")) and args.model == "qwen2.5-coder:7b",
+        "cache_writable": bool(env_status.get("cache_directory_writable")),
+        "exactly_10_documents": len(documents) == 10,
+        "all_10_labels_verified": len(documents) == 10 and accuracy_claims_allowed_for_labels(labels),
+        "same_selected_document_ids": len(expected_ids) == 10 and len(set(expected_ids)) == 10,
+        "advisory_mode_active": args.mode == "advisory",
+        "auto_apply_disabled": settings.llm_resolver_auto_apply_safe_corrections is False,
+        "prompt_version_v3": prompt_versions == ("hybrid_prompt_v3",),
+    }
+    missing_or_incomplete = [
+        {
+            "document_id": Path(document.filename).stem,
+            "filename": document.filename,
+            "verification_status": quality.get("verification_status"),
+            "eligible_for_accuracy": quality.get("eligible_for_accuracy"),
+            "missing_fields": quality.get("missing_fields"),
+            "errors": quality.get("errors"),
+            "warnings": quality.get("warnings"),
+        }
+        for document, quality in zip(documents, quality_rows)
+        if not quality.get("eligible_for_accuracy")
+    ]
+    return {
+        "phase_2_8_mode": True,
+        "run_id": args.run_id,
+        "ready": all(checks.values()),
+        "checks": checks,
+        "selected_document_ids": expected_ids,
+        "documents_total": len(documents),
+        "documents_complete": len(documents) - len(missing_or_incomplete),
+        "incomplete_documents": missing_or_incomplete,
+        "refusal_reason": None if all(checks.values()) else "Verified 10-document benchmark requires exactly 10 fully verified labels, advisory mode, hybrid_prompt_v3, Ollama readiness, writable cache, and auto-apply disabled.",
+        "reports_that_were_not_generated": [
+            "verified_10doc_accuracy_metrics.json",
+            "verified_10doc_field_accuracy.csv",
+            "verified_10doc_correction_review.csv",
+            "verified_10doc_latency.csv",
+            "verified_10doc_error_analysis.md",
+            "verified_10doc_hybrid_report.md",
+            "verified_10doc_deployment_decision.md",
+        ] if not all(checks.values()) else [],
+    }
+
+
+def write_verified_10doc_pre_run_report(run_root: Path, pre_run: dict[str, Any]) -> None:
+    lines = [
+        "# Verified 10-Document Pre-Run Validation",
+        "",
+        f"- Run ID: {pre_run.get('run_id')}",
+        f"- Ready: {pre_run.get('ready')}",
+        f"- Documents total: {pre_run.get('documents_total')}",
+        f"- Complete documents: {pre_run.get('documents_complete')}",
+        "",
+        "## Checks",
+        "",
+        "| Check | Passed |",
+        "|---|---:|",
+    ]
+    for key, value in (pre_run.get("checks") or {}).items():
+        lines.append(f"| {key} | {value} |")
+    if pre_run.get("refusal_reason"):
+        lines.extend(["", f"**Refused:** {pre_run['refusal_reason']}"])
+    lines.extend(["", "## Incomplete Documents", "", "| Document | Status | Missing Fields | Errors | Warnings |", "|---|---|---|---|---|"])
+    for row in pre_run.get("incomplete_documents") or []:
+        lines.append(
+            f"| {row['document_id']} | {row.get('verification_status')} | {', '.join(row.get('missing_fields') or [])} | {'; '.join(row.get('errors') or [])} | {'; '.join(row.get('warnings') or [])} |"
+        )
+    if pre_run.get("reports_that_were_not_generated"):
+        lines.extend(["", "## Reports Not Generated", ""])
+        lines.extend(f"- `{name}`" for name in pre_run["reports_that_were_not_generated"])
+    (run_root / "verified_10doc_pre_run_validation.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def run_document(document, engine: OCREngine, args: argparse.Namespace, prompt_version: str, run_root: Path) -> dict[str, Any]:
