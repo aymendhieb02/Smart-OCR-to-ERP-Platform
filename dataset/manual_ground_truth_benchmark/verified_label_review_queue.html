@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verified Ten-Document Label Review Queue</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #172033; }
+    .card { background: white; border: 1px solid #d9e1ee; border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+    img { max-width: 780px; width: 100%; display: block; border: 1px solid #d9e1ee; margin: 12px 0; }
+    textarea { width: 100%; min-height: 320px; font-family: Consolas, monospace; }
+    pre { background: #f0f3f8; padding: 10px; overflow: auto; }
+    button { padding: 8px 12px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Verified Ten-Document Label Review Queue</h1>
+  <p>Review the document image, compare it with deterministic predictions from your benchmark run, edit the JSON, and save it back to the matching label file only after human verification. Do not copy deterministic values without checking the source document.</p>
+
+        <section class="card">
+          <h2>01_batch1-0001.jpg</h2>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\01_batch1-0001.jpg">images\01_batch1-0001.jpg</a></p>
+          <img src="images\01_batch1-0001.jpg" alt="01_batch1-0001.jpg">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;01_batch1-0001.jpg&quot;,
+  &quot;source_path&quot;: &quot;01_batch1-0001.jpg&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;01_batch1-0001.jpg&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '01_batch1-0001.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>02_batch1-0002.jpg</h2>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\02_batch1-0002.jpg">images\02_batch1-0002.jpg</a></p>
+          <img src="images\02_batch1-0002.jpg" alt="02_batch1-0002.jpg">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;02_batch1-0002.jpg&quot;,
+  &quot;source_path&quot;: &quot;02_batch1-0002.jpg&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;02_batch1-0002.jpg&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '02_batch1-0002.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>03_batch1-0003.jpg</h2>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\03_batch1-0003.jpg">images\03_batch1-0003.jpg</a></p>
+          <img src="images\03_batch1-0003.jpg" alt="03_batch1-0003.jpg">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;03_batch1-0003.jpg&quot;,
+  &quot;source_path&quot;: &quot;03_batch1-0003.jpg&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;03_batch1-0003.jpg&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '03_batch1-0003.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>04_test-00000-of-00001_000000.png</h2>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\04_test-00000-of-00001_000000.png">images\04_test-00000-of-00001_000000.png</a></p>
+          <img src="images\04_test-00000-of-00001_000000.png" alt="04_test-00000-of-00001_000000.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;04_test-00000-of-00001_000000.png&quot;,
+  &quot;source_path&quot;: &quot;04_test-00000-of-00001_000000.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;04_test-00000-of-00001_000000.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '04_test-00000-of-00001_000000.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>05_test-00000-of-00001_000001.png</h2>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\05_test-00000-of-00001_000001.png">images\05_test-00000-of-00001_000001.png</a></p>
+          <img src="images\05_test-00000-of-00001_000001.png" alt="05_test-00000-of-00001_000001.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;05_test-00000-of-00001_000001.png&quot;,
+  &quot;source_path&quot;: &quot;05_test-00000-of-00001_000001.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;05_test-00000-of-00001_000001.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '05_test-00000-of-00001_000001.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>06_test-00000-of-00001_000002.png</h2>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\06_test-00000-of-00001_000002.png">images\06_test-00000-of-00001_000002.png</a></p>
+          <img src="images\06_test-00000-of-00001_000002.png" alt="06_test-00000-of-00001_000002.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;06_test-00000-of-00001_000002.png&quot;,
+  &quot;source_path&quot;: &quot;06_test-00000-of-00001_000002.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;06_test-00000-of-00001_000002.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '06_test-00000-of-00001_000002.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>07_test-00000-of-00001-af2d92d1cee28514_000000.png</h2>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\07_test-00000-of-00001-af2d92d1cee28514_000000.png">images\07_test-00000-of-00001-af2d92d1cee28514_000000.png</a></p>
+          <img src="images\07_test-00000-of-00001-af2d92d1cee28514_000000.png" alt="07_test-00000-of-00001-af2d92d1cee28514_000000.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;07_test-00000-of-00001-af2d92d1cee28514_000000.png&quot;,
+  &quot;source_path&quot;: &quot;07_test-00000-of-00001-af2d92d1cee28514_000000.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;07_test-00000-of-00001-af2d92d1cee28514_000000.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '07_test-00000-of-00001-af2d92d1cee28514_000000.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>08_test-00000-of-00001-af2d92d1cee28514_000001.png</h2>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\08_test-00000-of-00001-af2d92d1cee28514_000001.png">images\08_test-00000-of-00001-af2d92d1cee28514_000001.png</a></p>
+          <img src="images\08_test-00000-of-00001-af2d92d1cee28514_000001.png" alt="08_test-00000-of-00001-af2d92d1cee28514_000001.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;08_test-00000-of-00001-af2d92d1cee28514_000001.png&quot;,
+  &quot;source_path&quot;: &quot;08_test-00000-of-00001-af2d92d1cee28514_000001.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;08_test-00000-of-00001-af2d92d1cee28514_000001.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '08_test-00000-of-00001-af2d92d1cee28514_000001.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>10_test-00000-of-00001_000003.png</h2>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\10_test-00000-of-00001_000003.png">images\10_test-00000-of-00001_000003.png</a></p>
+          <img src="images\10_test-00000-of-00001_000003.png" alt="10_test-00000-of-00001_000003.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;10_test-00000-of-00001_000003.png&quot;,
+  &quot;source_path&quot;: &quot;10_test-00000-of-00001_000003.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;10_test-00000-of-00001_000003.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '10_test-00000-of-00001_000003.json')">Download edited label JSON</button>
+        </section>
+
+        <section class="card">
+          <h2>11_test-00000-of-00001_000004.png</h2>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Image/PDF:</strong> <a href="images\11_test-00000-of-00001_000004.png">images\11_test-00000-of-00001_000004.png</a></p>
+          <img src="images\11_test-00000-of-00001_000004.png" alt="11_test-00000-of-00001_000004.png">
+          <h3>Validation Errors</h3>
+          <pre>{
+  &quot;errors&quot;: [],
+  &quot;warnings&quot;: [
+    &quot;missing required field: supplier_name&quot;,
+    &quot;missing required field: customer_name&quot;,
+    &quot;missing required field: invoice_number&quot;,
+    &quot;missing required field: invoice_date&quot;,
+    &quot;missing required field: currency&quot;,
+    &quot;missing required field: amount_ht&quot;,
+    &quot;missing required field: tax_amount&quot;,
+    &quot;missing required field: amount_ttc&quot;,
+    &quot;missing required field: line_items&quot;,
+    &quot;blank line-item template rows: 1&quot;
+  ],
+  &quot;missing_fields&quot;: [
+    &quot;amount_ht&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;currency&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_date&quot;,
+    &quot;invoice_number&quot;,
+    &quot;line_items&quot;,
+    &quot;supplier_name&quot;,
+    &quot;tax_amount&quot;
+  ]
+}</pre>
+          <h3>Existing Label</h3>
+          <textarea>{
+  &quot;filename&quot;: &quot;11_test-00000-of-00001_000004.png&quot;,
+  &quot;source_path&quot;: &quot;11_test-00000-of-00001_000004.png&quot;,
+  &quot;document_type&quot;: null,
+  &quot;supplier_name&quot;: null,
+  &quot;customer_name&quot;: null,
+  &quot;invoice_number&quot;: null,
+  &quot;invoice_date&quot;: null,
+  &quot;due_date&quot;: null,
+  &quot;currency&quot;: null,
+  &quot;amount_ht&quot;: null,
+  &quot;tax_amount&quot;: null,
+  &quot;amount_ttc&quot;: null,
+  &quot;tax_rate&quot;: null,
+  &quot;line_items&quot;: [
+    {
+      &quot;reference&quot;: null,
+      &quot;description&quot;: null,
+      &quot;quantity&quot;: null,
+      &quot;unit&quot;: null,
+      &quot;unit_price&quot;: null,
+      &quot;tax_rate&quot;: null,
+      &quot;line_total_ht&quot;: null,
+      &quot;line_total_ttc&quot;: null
+    }
+  ],
+  &quot;notes&quot;: null,
+  &quot;verified_by_human&quot;: false,
+  &quot;verification_status&quot;: &quot;draft&quot;,
+  &quot;verified_by&quot;: null,
+  &quot;verified_at&quot;: null,
+  &quot;source_document&quot;: &quot;11_test-00000-of-00001_000004.png&quot;,
+  &quot;uncertain_fields&quot;: [
+    &quot;supplier_name&quot;,
+    &quot;customer_name&quot;,
+    &quot;invoice_number&quot;,
+    &quot;invoice_date&quot;,
+    &quot;currency&quot;,
+    &quot;amount_ht&quot;,
+    &quot;tax_amount&quot;,
+    &quot;amount_ttc&quot;,
+    &quot;line_items&quot;
+  ]
+}</textarea>
+          <button onclick="downloadLabel(this, '11_test-00000-of-00001_000004.json')">Download edited label JSON</button>
+        </section>
+
+  <script>
+    function downloadLabel(button, filename) {
+      const text = button.parentElement.querySelector('textarea').value;
+      const blob = new Blob([text], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>

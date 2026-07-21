@@ -24,6 +24,21 @@
       "line_total_ttc": null
     }
   ],
-  "notes": "",
-  "verified_by_human": false
+  "notes": null,
+  "verified_by_human": false,
+  "verification_status": "draft",
+  "verified_by": null,
+  "verified_at": null,
+  "source_document": "02_batch1-0002.jpg",
+  "uncertain_fields": [
+    "supplier_name",
+    "customer_name",
+    "invoice_number",
+    "invoice_date",
+    "currency",
+    "amount_ht",
+    "tax_amount",
+    "amount_ttc",
+    "line_items"
+  ]
 }

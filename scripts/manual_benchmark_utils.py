@@ -49,6 +49,19 @@ REQUIRED_FIELD_NAMES = [
 ]
 
 FINANCIAL_FIELD_NAMES = ["amount_ht", "tax_amount", "amount_ttc", "tax_rate"]
+VERIFICATION_STATUSES = {"draft", "partially_verified", "verified", "rejected"}
+STRICT_REQUIRED_FIELD_NAMES = [
+    "supplier_name",
+    "customer_name",
+    "invoice_number",
+    "invoice_date",
+    "currency",
+    "amount_ht",
+    "tax_amount",
+    "amount_ttc",
+]
+STRICT_LABEL_METADATA_FIELDS = ["verification_status", "verified_by", "verified_at", "source_document", "notes", "uncertain_fields"]
+LINE_ITEM_VALUE_FIELDS = ["description", "reference", "quantity", "unit", "unit_price", "tax_rate", "line_total_ht", "line_total_ttc", "total"]
 
 
 LABEL_TEMPLATE: dict[str, Any] = {
@@ -77,8 +90,13 @@ LABEL_TEMPLATE: dict[str, Any] = {
             "line_total_ttc": None,
         }
     ],
-    "notes": "",
+    "notes": None,
     "verified_by_human": False,
+    "verification_status": "draft",
+    "verified_by": None,
+    "verified_at": None,
+    "source_document": None,
+    "uncertain_fields": [],
 }
 
 
@@ -360,9 +378,144 @@ def load_manifest_documents(benchmark_root: Path) -> list[BenchmarkDocument]:
 
 def validate_verified_label(label_path: Path) -> dict[str, Any]:
     label = read_json(label_path)
-    if label.get("verified_by_human") is not True:
+    quality = validate_verified_label_quality(label, label_path=label_path)
+    if not quality["eligible_for_accuracy"]:
         raise ValueError(f"Label is not verified by a human: {label_path}")
     return label
+
+
+def validate_verified_label_quality(label: dict[str, Any], *, label_path: Path | None = None) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    missing_fields: list[str] = []
+    line_item_errors: list[str] = []
+    status = label.get("verification_status") or ("verified" if label.get("verified_by_human") is True else "draft")
+    if status not in VERIFICATION_STATUSES:
+        errors.append(f"invalid verification_status: {status}")
+    for field in STRICT_LABEL_METADATA_FIELDS:
+        if field not in label:
+            errors.append(f"missing verification metadata: {field}")
+    if status == "verified":
+        for field in ("verified_by", "verified_at", "source_document"):
+            if label.get(field) in (None, "", []):
+                errors.append(f"verified label missing metadata: {field}")
+        if label.get("verified_by_human") is not True:
+            errors.append("verified label must set verified_by_human=true")
+        if label.get("uncertain_fields") not in (None, []):
+            errors.append("verified label cannot contain unresolved uncertain_fields")
+
+    for field, value in iter_label_values(label):
+        if value == "":
+            errors.append(f"empty string is not allowed: {field}")
+
+    for field in STRICT_REQUIRED_FIELD_NAMES:
+        value = label.get(field)
+        if value in (None, "", []):
+            missing_fields.append(field)
+        if field in {"amount_ht", "tax_amount", "amount_ttc"} and value not in (None, "") and normalize_amount(value) is None:
+            errors.append(f"numeric field is malformed: {field}")
+
+    meaningful_rows = meaningful_line_items(label.get("line_items") or [])
+    blank_templates = blank_line_item_templates(label.get("line_items") or [])
+    if blank_templates:
+        line_item_errors.append(f"blank line-item template rows: {len(blank_templates)}")
+    if not meaningful_rows:
+        missing_fields.append("line_items")
+    for index, row in enumerate(meaningful_rows, start=1):
+        for numeric_field in ("quantity", "unit_price", "tax_rate", "line_total_ht", "line_total_ttc", "total"):
+            if row.get(numeric_field) not in (None, "") and normalize_amount(row.get(numeric_field)) is None:
+                line_item_errors.append(f"line {index} malformed numeric field: {numeric_field}")
+        if not row.get("description") and not row.get("reference"):
+            line_item_errors.append(f"line {index} missing description/reference")
+        if row.get("quantity") is None:
+            line_item_errors.append(f"line {index} missing quantity")
+        if row.get("unit_price") is None:
+            line_item_errors.append(f"line {index} missing unit_price")
+        if row.get("line_total_ht") is None and row.get("line_total_ttc") is None and row.get("total") is None:
+            line_item_errors.append(f"line {index} missing line total")
+    duplicates = duplicate_line_items(meaningful_rows)
+    if duplicates:
+        line_item_errors.append(f"possible duplicate line items: {len(duplicates)}")
+
+    amount_ht = normalize_amount(label.get("amount_ht"))
+    tax_amount = normalize_amount(label.get("tax_amount"))
+    amount_ttc = normalize_amount(label.get("amount_ttc"))
+    totals_consistent = None
+    if amount_ht is not None and tax_amount is not None and amount_ttc is not None:
+        totals_consistent = abs((amount_ht + tax_amount) - amount_ttc) <= max(AMOUNT_ABS_TOLERANCE, abs(amount_ttc) * AMOUNT_REL_TOLERANCE)
+        if not totals_consistent and not str(label.get("notes") or "").strip():
+            errors.append("amount_ht + tax_amount does not match amount_ttc and notes do not explain the difference")
+
+    if status == "verified":
+        for field in missing_fields:
+            errors.append(f"verified label missing required field: {field}")
+        errors.extend(line_item_errors)
+    else:
+        warnings.extend(f"missing required field: {field}" for field in missing_fields)
+        warnings.extend(line_item_errors)
+
+    return {
+        "label_path": str(label_path) if label_path else None,
+        "filename": label.get("filename"),
+        "verification_status": status,
+        "verified_by_human": label.get("verified_by_human") is True,
+        "eligible_for_accuracy": status == "verified" and not errors and not missing_fields,
+        "missing_fields": sorted(set(missing_fields)),
+        "errors": errors,
+        "warnings": warnings,
+        "line_items_total_rows": len(label.get("line_items") or []),
+        "line_items_meaningful_rows": len(meaningful_rows),
+        "line_items_blank_template_rows": len(blank_templates),
+        "totals_consistent": totals_consistent,
+    }
+
+
+def meaningful_line_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row for row in rows
+        if isinstance(row, dict)
+        and any(row.get(field) not in (None, "", []) for field in LINE_ITEM_VALUE_FIELDS)
+    ]
+
+
+def blank_line_item_templates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row for row in rows
+        if isinstance(row, dict)
+        and not any(row.get(field) not in (None, "", []) for field in LINE_ITEM_VALUE_FIELDS)
+    ]
+
+
+def duplicate_line_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    duplicates: list[dict[str, Any]] = []
+    for row in rows:
+        key = (
+            normalize_text(row.get("description")),
+            normalize_text(row.get("reference")),
+            normalize_amount(row.get("quantity")),
+            normalize_amount(row.get("unit_price")),
+            normalize_amount(row.get("line_total_ht") if row.get("line_total_ht") is not None else row.get("line_total_ttc") if row.get("line_total_ttc") is not None else row.get("total")),
+        )
+        if key in seen:
+            duplicates.append(row)
+        seen.add(key)
+    return duplicates
+
+
+def iter_label_values(value: Any, prefix: str = ""):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from iter_label_values(child, f"{prefix}.{key}" if prefix else str(key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from iter_label_values(child, f"{prefix}[{index}]")
+    else:
+        yield prefix, value
+
+
+def accuracy_claims_allowed_for_labels(labels: list[dict[str, Any]]) -> bool:
+    return bool(labels) and all(validate_verified_label_quality(label)["eligible_for_accuracy"] for label in labels)
 
 
 def normalize_text(value: Any) -> str:

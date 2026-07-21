@@ -29,6 +29,7 @@ from scripts.manual_benchmark_utils import (
     read_csv,
     safe_json_default,
     validate_verified_label,
+    validate_verified_label_quality,
     write_csv,
     write_json,
 )
@@ -574,6 +575,7 @@ def calculate_ground_truth_quality(artifacts: list[dict[str, Any]]) -> dict[str,
             "document_id": document_id,
             "dataset": artifact.get("dataset"),
             "verified_by_human": label.get("verified_by_human") is True,
+            "verification_status": label.get("verification_status") or ("verified" if label.get("verified_by_human") is True else "draft"),
             "present_fields": present,
             "missing_fields": missing,
             "missing_line_items": "line_items" in missing,
@@ -601,6 +603,8 @@ def missing_ground_truth_fields(label: dict[str, Any]) -> list[str]:
             missing.append(field)
     if label.get("verified_by_human") is not True:
         missing.append("verified_by_human")
+    if label.get("verification_status") != "verified":
+        missing.append("verification_status")
     return missing
 
 
@@ -614,7 +618,7 @@ def meaningful_truth_line_items(label: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def label_is_verified_complete(label: dict[str, Any]) -> bool:
-    return label.get("verified_by_human") is True and not missing_ground_truth_fields(label)
+    return validate_verified_label_quality(label)["eligible_for_accuracy"]
 
 
 def write_ground_truth_quality_report(run_root: Path, quality: dict[str, Any]) -> None:

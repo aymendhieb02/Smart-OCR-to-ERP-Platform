@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-07-21T14:30:54.644102+00:00",
+  "benchmark_root": "dataset/manual_ground_truth_benchmark",
+  "selection_locked": true,
+  "document_count": 10,
+  "selection_policy": "Exactly 10 fixed commercial documents selected from the existing manual benchmark; labels must be manually verified before accuracy claims.",
+  "confidentiality_note": "No new raw private invoices are introduced by this campaign file; it references documents already present in the repository benchmark folder.",
+  "documents": [
+    {
+      "document_id": "01_batch1-0001",
+      "filename": "01_batch1-0001.jpg",
+      "dataset": "high-quality-invoice-images-for-ocr",
+      "document_type_hint": "invoice",
+      "image_path": "images\\01_batch1-0001.jpg",
+      "label_path": "labels\\01_batch1-0001.json",
+      "source_document": "01_batch1-0001.jpg",
+      "file_hash": "56238d4d934c433c24e53d0674f0530e11024f284e8ffcb3bb0bcc0d58850740",
+      "coverage_tags": [
+        "easy_control",
+        "supplier_customer_problem"
+      ],
+      "image_quality": "high",
+      "table_heavy": false,
+      "multilingual": false,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "02_batch1-0002",
+      "filename": "02_batch1-0002.jpg",
+      "dataset": "high-quality-invoice-images-for-ocr",
+      "document_type_hint": "invoice",
+      "image_path": "images\\02_batch1-0002.jpg",
+      "label_path": "labels\\02_batch1-0002.json",
+      "source_document": "02_batch1-0002.jpg",
+      "file_hash": "862f7d313f1233f3e44a89610a4015d861dc771ad2ba8028ad56e2d4fd37ac71",
+      "coverage_tags": [
+        "supplier_customer_problem"
+      ],
+      "image_quality": "high",
+      "table_heavy": false,
+      "multilingual": false,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "03_batch1-0003",
+      "filename": "03_batch1-0003.jpg",
+      "dataset": "high-quality-invoice-images-for-ocr",
+      "document_type_hint": "invoice",
+      "image_path": "images\\03_batch1-0003.jpg",
+      "label_path": "labels\\03_batch1-0003.json",
+      "source_document": "03_batch1-0003.jpg",
+      "file_hash": "807a6b0b942eb2ce406db3c57a833bba539e165017c81e2b1a0a98104d213677",
+      "coverage_tags": [
+        "supplier_customer_problem"
+      ],
+      "image_quality": "high",
+      "table_heavy": false,
+      "multilingual": false,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "04_test-00000-of-00001_000000",
+      "filename": "04_test-00000-of-00001_000000.png",
+      "dataset": "FATURA2-invoices",
+      "document_type_hint": "invoice",
+      "image_path": "images\\04_test-00000-of-00001_000000.png",
+      "label_path": "labels\\04_test-00000-of-00001_000000.json",
+      "source_document": "04_test-00000-of-00001_000000.png",
+      "file_hash": "92c99ba8ed658028f9e5d8d7a1b63ec12fb742bd8a52253bb7f8a3e41799bb2c",
+      "coverage_tags": [
+        "table_heavy",
+        "totals_or_vat_issue",
+        "multilingual"
+      ],
+      "image_quality": "high",
+      "table_heavy": true,
+      "multilingual": true,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "05_test-00000-of-00001_000001",
+      "filename": "05_test-00000-of-00001_000001.png",
+      "dataset": "FATURA2-invoices",
+      "document_type_hint": "invoice",
+      "image_path": "images\\05_test-00000-of-00001_000001.png",
+      "label_path": "labels\\05_test-00000-of-00001_000001.json",
+      "source_document": "05_test-00000-of-00001_000001.png",
+      "file_hash": "756ff2e028f895b869159a7234e618c939eb14a3f0d6477696f15721aae68083",
+      "coverage_tags": [
+        "table_heavy",
+        "totals_or_vat_issue",
+        "multilingual"
+      ],
+      "image_quality": "high",
+      "table_heavy": true,
+      "multilingual": true,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "06_test-00000-of-00001_000002",
+      "filename": "06_test-00000-of-00001_000002.png",
+      "dataset": "FATURA2-invoices",
+      "document_type_hint": "invoice",
+      "image_path": "images\\06_test-00000-of-00001_000002.png",
+      "label_path": "labels\\06_test-00000-of-00001_000002.json",
+      "source_document": "06_test-00000-of-00001_000002.png",
+      "file_hash": "77aaa92e196dbabdbde83e53aef92d17024dddcd66b8b529fc06f3896a46eb14",
+      "coverage_tags": [
+        "table_heavy"
+      ],
+      "image_quality": "high",
+      "table_heavy": true,
+      "multilingual": true,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "07_test-00000-of-00001-af2d92d1cee28514_000000",
+      "filename": "07_test-00000-of-00001-af2d92d1cee28514_000000.png",
+      "dataset": "invoices-and-receipts_ocr_v1",
+      "document_type_hint": "receipt",
+      "image_path": "images\\07_test-00000-of-00001-af2d92d1cee28514_000000.png",
+      "label_path": "labels\\07_test-00000-of-00001-af2d92d1cee28514_000000.json",
+      "source_document": "07_test-00000-of-00001-af2d92d1cee28514_000000.png",
+      "file_hash": "868cbd7254d8c94ef585f212e2e95fb2af350a0a2d8ea2efcc6b03da1c21f8bb",
+      "coverage_tags": [
+        "noisy_low_quality_scan"
+      ],
+      "image_quality": "low",
+      "table_heavy": false,
+      "multilingual": false,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "08_test-00000-of-00001-af2d92d1cee28514_000001",
+      "filename": "08_test-00000-of-00001-af2d92d1cee28514_000001.png",
+      "dataset": "invoices-and-receipts_ocr_v1",
+      "document_type_hint": "receipt",
+      "image_path": "images\\08_test-00000-of-00001-af2d92d1cee28514_000001.png",
+      "label_path": "labels\\08_test-00000-of-00001-af2d92d1cee28514_000001.json",
+      "source_document": "08_test-00000-of-00001-af2d92d1cee28514_000001.png",
+      "file_hash": "40866af1a282a86877161b9b27d09ed9d9b842e5035520e9f73d856810f9eb4c",
+      "coverage_tags": [
+        "noisy_low_quality_scan"
+      ],
+      "image_quality": "low",
+      "table_heavy": false,
+      "multilingual": false,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "10_test-00000-of-00001_000003",
+      "filename": "10_test-00000-of-00001_000003.png",
+      "dataset": "FATURA2-invoices",
+      "document_type_hint": "invoice",
+      "image_path": "images\\10_test-00000-of-00001_000003.png",
+      "label_path": "labels\\10_test-00000-of-00001_000003.json",
+      "source_document": "10_test-00000-of-00001_000003.png",
+      "file_hash": "09babb44ea4853f1c1e9d16de0c80f4208b24d393997e59eb3bbfad28d3db7df",
+      "coverage_tags": [
+        "multilingual"
+      ],
+      "image_quality": "high",
+      "table_heavy": true,
+      "multilingual": true,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    },
+    {
+      "document_id": "11_test-00000-of-00001_000004",
+      "filename": "11_test-00000-of-00001_000004.png",
+      "dataset": "FATURA2-invoices",
+      "document_type_hint": "invoice",
+      "image_path": "images\\11_test-00000-of-00001_000004.png",
+      "label_path": "labels\\11_test-00000-of-00001_000004.json",
+      "source_document": "11_test-00000-of-00001_000004.png",
+      "file_hash": "add048070905f4ac4bdf6683e290ab69d84f258150a7c407e47624796a1bf53e",
+      "coverage_tags": [
+        "multilingual"
+      ],
+      "image_quality": "high",
+      "table_heavy": true,
+      "multilingual": true,
+      "verification_status": "draft",
+      "eligible_for_accuracy": false
+    }
+  ]
+}
