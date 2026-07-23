@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Human Ground Truth Verification</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #eef2f7; color: #142033; }
+    header { background: #10223f; color: white; padding: 18px 24px; }
+    main { display: grid; grid-template-columns: minmax(420px, 54vw) 1fr; gap: 16px; padding: 16px; }
+    .panel, .doc-list { background: white; border: 1px solid #d8e0ed; border-radius: 8px; padding: 14px; }
+    .doc-list { margin: 16px; }
+    img { width: 100%; max-height: 82vh; object-fit: contain; border: 1px solid #d8e0ed; background: white; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #e1e7f0; padding: 8px; text-align: left; vertical-align: top; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #c9d4e5; border-radius: 5px; }
+    textarea { min-height: 54px; }
+    button { padding: 8px 10px; margin: 4px 4px 4px 0; font-weight: 700; }
+    .status { border-radius: 999px; padding: 3px 8px; background: #eef2ff; font-size: 12px; }
+    .missing { color: #a33333; } .confirmed { color: #176b3a; } .needs_review { color: #8a5a00; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+    pre { white-space: pre-wrap; background: #f4f7fb; padding: 10px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Human-Assisted Ground Truth Verification</h1>
+    <p>Review from the invoice image. Candidates are suggestions only. Nothing becomes verified until every required field is confirmed by a human.</p>
+  </header>
+  <section class="doc-list" id="docList"></section>
+  <main>
+    <section class="panel">
+      <h2 id="docTitle">Document</h2>
+      <img id="docImage" alt="Selected invoice">
+    </section>
+    <section class="panel">
+      <div class="toolbar">
+        <button onclick="markReviewed()">Mark document reviewed</button>
+        <button onclick="tryVerify()">Try mark verified</button>
+        <button onclick="downloadLabel()">Download label JSON</button>
+        <button onclick="downloadProgress()">Download progress JSON</button>
+        <button onclick="downloadMarkdown()">Download progress MD</button>
+      </div>
+      <p id="docProgress"></p>
+      <table>
+        <thead><tr><th>Field</th><th>Candidate</th><th>Evidence</th><th>Confirmed Value</th><th>Status</th></tr></thead>
+        <tbody id="fieldRows"></tbody>
+      </table>
+      <h3>Line Items</h3>
+      <textarea id="lineItems" placeholder="Enter reviewed line items JSON array"></textarea>
+      <label><input type="checkbox" id="lineItemsReviewed" onchange="saveCurrent()"> Line items reviewed from source document</label>
+      <h3>Notes</h3>
+      <textarea id="notes" placeholder="Human review notes"></textarea>
+      <pre id="issues"></pre>
+    </section>
+  </main>
+  <script>
+    const packages = [{"schema_version": 1, "created_at": "2026-07-23T12:33:50.315239+00:00", "document_id": "01_batch1-0001", "filename": "01_batch1-0001.jpg", "dataset": "high-quality-invoice-images-for-ocr", "image_path": "images\\01_batch1-0001.jpg", "label_path": "labels\\01_batch1-0001.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.317238+00:00", "document_id": "02_batch1-0002", "filename": "02_batch1-0002.jpg", "dataset": "high-quality-invoice-images-for-ocr", "image_path": "images\\02_batch1-0002.jpg", "label_path": "labels\\02_batch1-0002.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.319236+00:00", "document_id": "03_batch1-0003", "filename": "03_batch1-0003.jpg", "dataset": "high-quality-invoice-images-for-ocr", "image_path": "images\\03_batch1-0003.jpg", "label_path": "labels\\03_batch1-0003.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.320238+00:00", "document_id": "04_test-00000-of-00001_000000", "filename": "04_test-00000-of-00001_000000.png", "dataset": "FATURA2-invoices", "image_path": "images\\04_test-00000-of-00001_000000.png", "label_path": "labels\\04_test-00000-of-00001_000000.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.321252+00:00", "document_id": "05_test-00000-of-00001_000001", "filename": "05_test-00000-of-00001_000001.png", "dataset": "FATURA2-invoices", "image_path": "images\\05_test-00000-of-00001_000001.png", "label_path": "labels\\05_test-00000-of-00001_000001.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.323235+00:00", "document_id": "06_test-00000-of-00001_000002", "filename": "06_test-00000-of-00001_000002.png", "dataset": "FATURA2-invoices", "image_path": "images\\06_test-00000-of-00001_000002.png", "label_path": "labels\\06_test-00000-of-00001_000002.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.325236+00:00", "document_id": "07_test-00000-of-00001-af2d92d1cee28514_000000", "filename": "07_test-00000-of-00001-af2d92d1cee28514_000000.png", "dataset": "invoices-and-receipts_ocr_v1", "image_path": "images\\07_test-00000-of-00001-af2d92d1cee28514_000000.png", "label_path": "labels\\07_test-00000-of-00001-af2d92d1cee28514_000000.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.326237+00:00", "document_id": "08_test-00000-of-00001-af2d92d1cee28514_000001", "filename": "08_test-00000-of-00001-af2d92d1cee28514_000001.png", "dataset": "invoices-and-receipts_ocr_v1", "image_path": "images\\08_test-00000-of-00001-af2d92d1cee28514_000001.png", "label_path": "labels\\08_test-00000-of-00001-af2d92d1cee28514_000001.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.327236+00:00", "document_id": "10_test-00000-of-00001_000003", "filename": "10_test-00000-of-00001_000003.png", "dataset": "FATURA2-invoices", "image_path": "images\\10_test-00000-of-00001_000003.png", "label_path": "labels\\10_test-00000-of-00001_000003.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}, {"schema_version": 1, "created_at": "2026-07-23T12:33:50.329235+00:00", "document_id": "11_test-00000-of-00001_000004", "filename": "11_test-00000-of-00001_000004.png", "dataset": "FATURA2-invoices", "image_path": "images\\11_test-00000-of-00001_000004.png", "label_path": "labels\\11_test-00000-of-00001_000004.json", "verification_status": "draft", "human_review_required": true, "auto_verified": false, "rule": "A document may become verified only after a human confirms every required field and every line item.", "candidates": {"supplier_name": {"field": "supplier_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "customer_name": {"field": "customer_name", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_number": {"field": "invoice_number", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "invoice_date": {"field": "invoice_date", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "currency": {"field": "currency", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ht": {"field": "amount_ht", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "tax_amount": {"field": "tax_amount", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "amount_ttc": {"field": "amount_ttc", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing"}, "line_items": {"field": "line_items", "extracted_value": null, "ocr_confidence": null, "semantic_confidence": null, "evidence_reference": {"type": "not_available", "block": null, "line": null, "row": null, "note": "No saved extraction candidate was available in the manual benchmark folder; human confirmation is required."}, "status": "missing", "rows": []}}, "review_state": {"required_fields": ["supplier_name", "customer_name", "invoice_number", "invoice_date", "currency", "amount_ht", "tax_amount", "amount_ttc", "line_items"], "confirmed_fields": [], "line_items_reviewed": false, "placeholders_remaining": false, "blank_template_rows_remaining": true, "ready_for_verified_status": false}}];
+    const labels = {"supplier_name": "supplier", "customer_name": "customer", "invoice_number": "invoice number", "invoice_date": "invoice date", "currency": "currency", "amount_ht": "subtotal HT", "tax_amount": "VAT", "amount_ttc": "total TTC", "line_items": "line items"};
+    const requiredFields = Object.keys(labels);
+    const state = JSON.parse(localStorage.getItem('gtVerificationState') || '{}');
+    let current = 0;
+
+    function init() {
+      for (const pack of packages) {
+        if (!state[pack.document_id]) {
+          state[pack.document_id] = {
+            verification_status: pack.verification_status || 'draft',
+            confirmed: {},
+            values: {},
+            line_items: [],
+            line_items_reviewed: false,
+            notes: ''
+          };
+          for (const field of requiredFields) {
+            const cand = pack.candidates[field];
+            if (cand && cand.extracted_value !== null && field !== 'line_items') {
+              state[pack.document_id].values[field] = cand.extracted_value;
+            }
+          }
+        }
+      }
+      renderList();
+      renderDoc();
+    }
+
+    function saveState() {
+      localStorage.setItem('gtVerificationState', JSON.stringify(state));
+    }
+
+    function renderList() {
+      const div = document.getElementById('docList');
+      div.innerHTML = packages.map((pack, idx) => {
+        const s = state[pack.document_id];
+        const pct = completion(pack.document_id);
+        return `<button onclick="current=${idx};renderDoc()">${pack.filename} <span class="status">${s.verification_status}</span> ${pct}%</button>`;
+      }).join(' ');
+    }
+
+    function renderDoc() {
+      const pack = packages[current];
+      const s = state[pack.document_id];
+      document.getElementById('docTitle').textContent = pack.filename;
+      document.getElementById('docImage').src = pack.image_path.replace(/\\/g, '/');
+      document.getElementById('docProgress').textContent = `Status: ${s.verification_status} | Completion: ${completion(pack.document_id)}%`;
+      document.getElementById('notes').value = s.notes || '';
+      document.getElementById('lineItems').value = JSON.stringify(s.line_items || [], null, 2);
+      document.getElementById('lineItemsReviewed').checked = !!s.line_items_reviewed;
+      const tbody = document.getElementById('fieldRows');
+      tbody.innerHTML = requiredFields.filter(f => f !== 'line_items').map(field => {
+        const cand = pack.candidates[field];
+        const evidence = cand.evidence_reference || {};
+        return `<tr>
+          <td>${labels[field]}</td>
+          <td><strong>${escapeHtml(String(cand.extracted_value ?? 'missing'))}</strong><br>OCR: ${cand.ocr_confidence ?? '-'}<br>Semantic: ${cand.semantic_confidence ?? '-'}</td>
+          <td>${escapeHtml(JSON.stringify(evidence))}</td>
+          <td><input value="${escapeAttr(s.values[field] ?? '')}" onchange="state['${pack.document_id}'].values['${field}']=this.value; saveCurrent()"></td>
+          <td><select onchange="state['${pack.document_id}'].confirmed['${field}']=this.value==='confirmed'; saveCurrent()">
+            <option value="needs_review" ${s.confirmed[field] ? '' : 'selected'}>needs_review</option>
+            <option value="confirmed" ${s.confirmed[field] ? 'selected' : ''}>confirmed</option>
+          </select></td>
+        </tr>`;
+      }).join('');
+      renderIssues();
+      renderList();
+    }
+
+    function saveCurrent() {
+      const pack = packages[current];
+      const s = state[pack.document_id];
+      s.notes = document.getElementById('notes').value;
+      try {
+        s.line_items = JSON.parse(document.getElementById('lineItems').value || '[]');
+      } catch (err) {}
+      s.line_items_reviewed = document.getElementById('lineItemsReviewed').checked;
+      saveState();
+      renderIssues();
+      renderList();
+    }
+
+    function completion(documentId) {
+      const s = state[documentId];
+      const confirmed = requiredFields.filter(f => f === 'line_items' ? s.line_items_reviewed && Array.isArray(s.line_items) && s.line_items.length > 0 : s.confirmed[f] && String(s.values[f] ?? '').trim() !== '').length;
+      return Math.round((confirmed / requiredFields.length) * 100);
+    }
+
+    function issuesFor(documentId) {
+      const s = state[documentId];
+      const issues = [];
+      for (const field of requiredFields) {
+        if (field === 'line_items') {
+          if (!s.line_items_reviewed) issues.push('line items not reviewed');
+          if (!Array.isArray(s.line_items) || s.line_items.length === 0) issues.push('line items missing');
+        } else {
+          if (!s.confirmed[field]) issues.push(`${labels[field]} not confirmed`);
+          if (String(s.values[field] ?? '').trim() === '') issues.push(`${labels[field]} value missing`);
+        }
+      }
+      return issues;
+    }
+
+    function renderIssues() {
+      const pack = packages[current];
+      document.getElementById('issues').textContent = issuesFor(pack.document_id).join('\n') || 'Ready for verified status.';
+      document.getElementById('docProgress').textContent = `Status: ${state[pack.document_id].verification_status} | Completion: ${completion(pack.document_id)}%`;
+    }
+
+    function markReviewed() {
+      const pack = packages[current];
+      state[pack.document_id].verification_status = 'reviewed';
+      saveCurrent();
+      renderDoc();
+    }
+
+    function tryVerify() {
+      const pack = packages[current];
+      const issues = issuesFor(pack.document_id);
+      if (issues.length) {
+        alert('Cannot verify yet:\n' + issues.join('\n'));
+        return;
+      }
+      state[pack.document_id].verification_status = 'verified';
+      saveCurrent();
+      renderDoc();
+    }
+
+    function buildLabel(pack) {
+      const s = state[pack.document_id];
+      return {
+        filename: pack.filename,
+        source_path: null,
+        document_type: 'invoice',
+        supplier_name: s.values.supplier_name || null,
+        customer_name: s.values.customer_name || null,
+        invoice_number: s.values.invoice_number || null,
+        invoice_date: s.values.invoice_date || null,
+        due_date: null,
+        currency: s.values.currency || null,
+        amount_ht: parseNumber(s.values.amount_ht),
+        tax_amount: parseNumber(s.values.tax_amount),
+        amount_ttc: parseNumber(s.values.amount_ttc),
+        tax_rate: null,
+        line_items: s.line_items || [],
+        notes: s.notes || 'human verified from source document',
+        verified_by_human: s.verification_status === 'verified',
+        verification_status: s.verification_status,
+        verified_by: s.verification_status === 'verified' ? 'human_reviewer' : null,
+        verified_at: s.verification_status === 'verified' ? new Date().toISOString() : null,
+        source_document: pack.filename,
+        uncertain_fields: s.verification_status === 'verified' ? [] : requiredFields.filter(f => issuesFor(pack.document_id).some(i => i.includes(labels[f]) || i.includes(f)))
+      };
+    }
+
+    function parseNumber(value) {
+      const text = String(value ?? '').trim();
+      if (!text) return null;
+      const parsed = Number(text.replace(/,/g, '.').replace(/[^0-9.\-]/g, ''));
+      return Number.isFinite(parsed) ? parsed : text;
+    }
+
+    function download(filename, text, type='application/json') {
+      const blob = new Blob([text], {type});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadLabel() {
+      const pack = packages[current];
+      download(pack.label_path.split(/[\\/]/).pop(), JSON.stringify(buildLabel(pack), null, 2));
+    }
+
+    function progressPayload() {
+      const docs = packages.map(pack => ({
+        document_id: pack.document_id,
+        filename: pack.filename,
+        status: state[pack.document_id].verification_status,
+        completion_percent: completion(pack.document_id),
+        issues: issuesFor(pack.document_id)
+      }));
+      return {
+        schema_version: 2,
+        generated_at: new Date().toISOString(),
+        selected_document_count: docs.length,
+        verified_documents: docs.filter(d => d.status === 'verified' && d.issues.length === 0).length,
+        reviewed_documents: docs.filter(d => ['reviewed','verified'].includes(d.status)).length,
+        completion_percent: Math.round(docs.reduce((a,d)=>a+d.completion_percent,0)/docs.length),
+        accuracy_claims_allowed: docs.every(d => d.status === 'verified' && d.issues.length === 0),
+        documents: docs
+      };
+    }
+
+    function downloadProgress() {
+      download('verification_summary.json', JSON.stringify(progressPayload(), null, 2));
+    }
+
+    function downloadMarkdown() {
+      const p = progressPayload();
+      const lines = ['# Verification Progress', '', `- Completion: ${p.completion_percent}%`, `- Verified documents: ${p.verified_documents}/${p.selected_document_count}`, `- Reviewed documents: ${p.reviewed_documents}/${p.selected_document_count}`, `- Accuracy claims allowed: ${p.accuracy_claims_allowed}`, '', '## Remaining Work', ''];
+      for (const doc of p.documents) lines.push(`- ${doc.filename}: ${doc.issues.length ? doc.issues.join('; ') : 'complete'}`);
+      download('verification_progress.md', lines.join('\n') + '\n', 'text/markdown');
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+    }
+    function escapeAttr(text) { return escapeHtml(text).replace(/"/g, '&quot;'); }
+    init();
+  </script>
+</body>
+</html>
