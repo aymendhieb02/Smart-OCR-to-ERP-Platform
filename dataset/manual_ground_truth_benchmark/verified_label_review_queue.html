@@ -10,15 +10,18 @@
     textarea { width: 100%; min-height: 320px; font-family: Consolas, monospace; }
     pre { background: #f0f3f8; padding: 10px; overflow: auto; }
     button { padding: 8px 12px; font-weight: 700; }
+    code { background: #eef2ff; padding: 2px 5px; border-radius: 4px; }
   </style>
 </head>
 <body>
   <h1>Verified Ten-Document Label Review Queue</h1>
   <p>Review the document image, compare it with deterministic predictions from your benchmark run, edit the JSON, and save it back to the matching label file only after human verification. Do not copy deterministic values without checking the source document.</p>
+  <p>Allowed workflow statuses: <code>draft</code>, <code>reviewed</code>, <code>verified</code>, <code>rejected</code>.</p>
 
         <section class="card">
           <h2>01_batch1-0001.jpg</h2>
-          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\01_batch1-0001.jpg">images\01_batch1-0001.jpg</a></p>
           <img src="images\01_batch1-0001.jpg" alt="01_batch1-0001.jpg">
           <h3>Validation Errors</h3>
@@ -98,7 +101,8 @@
 
         <section class="card">
           <h2>02_batch1-0002.jpg</h2>
-          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\02_batch1-0002.jpg">images\02_batch1-0002.jpg</a></p>
           <img src="images\02_batch1-0002.jpg" alt="02_batch1-0002.jpg">
           <h3>Validation Errors</h3>
@@ -178,7 +182,8 @@
 
         <section class="card">
           <h2>03_batch1-0003.jpg</h2>
-          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\03_batch1-0003.jpg">images\03_batch1-0003.jpg</a></p>
           <img src="images\03_batch1-0003.jpg" alt="03_batch1-0003.jpg">
           <h3>Validation Errors</h3>
@@ -258,7 +263,8 @@
 
         <section class="card">
           <h2>04_test-00000-of-00001_000000.png</h2>
-          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\04_test-00000-of-00001_000000.png">images\04_test-00000-of-00001_000000.png</a></p>
           <img src="images\04_test-00000-of-00001_000000.png" alt="04_test-00000-of-00001_000000.png">
           <h3>Validation Errors</h3>
@@ -338,7 +344,8 @@
 
         <section class="card">
           <h2>05_test-00000-of-00001_000001.png</h2>
-          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\05_test-00000-of-00001_000001.png">images\05_test-00000-of-00001_000001.png</a></p>
           <img src="images\05_test-00000-of-00001_000001.png" alt="05_test-00000-of-00001_000001.png">
           <h3>Validation Errors</h3>
@@ -418,7 +425,8 @@
 
         <section class="card">
           <h2>06_test-00000-of-00001_000002.png</h2>
-          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\06_test-00000-of-00001_000002.png">images\06_test-00000-of-00001_000002.png</a></p>
           <img src="images\06_test-00000-of-00001_000002.png" alt="06_test-00000-of-00001_000002.png">
           <h3>Validation Errors</h3>
@@ -498,7 +506,8 @@
 
         <section class="card">
           <h2>07_test-00000-of-00001-af2d92d1cee28514_000000.png</h2>
-          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\07_test-00000-of-00001-af2d92d1cee28514_000000.png">images\07_test-00000-of-00001-af2d92d1cee28514_000000.png</a></p>
           <img src="images\07_test-00000-of-00001-af2d92d1cee28514_000000.png" alt="07_test-00000-of-00001-af2d92d1cee28514_000000.png">
           <h3>Validation Errors</h3>
@@ -578,7 +587,8 @@
 
         <section class="card">
           <h2>08_test-00000-of-00001-af2d92d1cee28514_000001.png</h2>
-          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1 | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\08_test-00000-of-00001-af2d92d1cee28514_000001.png">images\08_test-00000-of-00001-af2d92d1cee28514_000001.png</a></p>
           <img src="images\08_test-00000-of-00001-af2d92d1cee28514_000001.png" alt="08_test-00000-of-00001-af2d92d1cee28514_000001.png">
           <h3>Validation Errors</h3>
@@ -658,7 +668,8 @@
 
         <section class="card">
           <h2>10_test-00000-of-00001_000003.png</h2>
-          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\10_test-00000-of-00001_000003.png">images\10_test-00000-of-00001_000003.png</a></p>
           <img src="images\10_test-00000-of-00001_000003.png" alt="10_test-00000-of-00001_000003.png">
           <h3>Validation Errors</h3>
@@ -738,7 +749,8 @@
 
         <section class="card">
           <h2>11_test-00000-of-00001_000004.png</h2>
-          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft</p>
+          <p><strong>Dataset:</strong> FATURA2-invoices | <strong>Status:</strong> draft | <strong>Eligible:</strong> False</p>
+          <p><strong>Workflow:</strong> set <code>verification_status</code> to <code>reviewed</code> while checking, then <code>verified</code> only after every required field is complete, or <code>rejected</code> with notes.</p>
           <p><strong>Image/PDF:</strong> <a href="images\11_test-00000-of-00001_000004.png">images\11_test-00000-of-00001_000004.png</a></p>
           <img src="images\11_test-00000-of-00001_000004.png" alt="11_test-00000-of-00001_000004.png">
           <h3>Validation Errors</h3>

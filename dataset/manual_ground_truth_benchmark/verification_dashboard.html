@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verification Dashboard</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; color: #172033; }
+    header { background: #10223f; color: white; padding: 24px 32px; }
+    main { padding: 24px 32px; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .metric, .card { background: white; border: 1px solid #d9e1ee; border-radius: 8px; padding: 16px; }
+    .metric strong { display: block; font-size: 28px; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .badge { border-radius: 999px; padding: 4px 10px; font-weight: 700; background: #eef2ff; color: #273b76; }
+    .ok { border-color: #43a047; } .warn { border-color: #f5a623; } .bad { border-color: #d64545; }
+    .bar { height: 10px; background: #e8edf5; border-radius: 999px; overflow: hidden; }
+    .bar span { display: block; height: 100%; background: #2563eb; }
+    ul { margin: 8px 0 0 18px; padding: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ten-Document Verification Dashboard</h1>
+    <p>Tracks label readiness only. It does not run benchmarks or change extraction.</p>
+  </header>
+  <main>
+    <section class="metrics">
+      <div class="metric">Required-field completion<strong>0.0%</strong></div>
+      <div class="metric">Verified documents<strong>0/10</strong></div>
+      <div class="metric">Accuracy claims allowed<strong>False</strong></div>
+    </section>
+    <section class="metric">
+      <h2>Workflow</h2>
+      <p>Draft means untouched, reviewed means human review started, verified means complete and eligible, rejected means excluded with a reason.</p>
+    </section>
+    <section class="grid">
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>01_batch1-0001.jpg</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\01_batch1-0001.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>02_batch1-0002.jpg</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\02_batch1-0002.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>03_batch1-0003.jpg</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> high-quality-invoice-images-for-ocr</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\03_batch1-0003.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>04_test-00000-of-00001_000000.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> FATURA2-invoices</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\04_test-00000-of-00001_000000.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>05_test-00000-of-00001_000001.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> FATURA2-invoices</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\05_test-00000-of-00001_000001.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>06_test-00000-of-00001_000002.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> FATURA2-invoices</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\06_test-00000-of-00001_000002.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>07_test-00000-of-00001-af2d92d1cee28514_000000.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\07_test-00000-of-00001-af2d92d1cee28514_000000.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>08_test-00000-of-00001-af2d92d1cee28514_000001.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> invoices-and-receipts_ocr_v1</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\08_test-00000-of-00001-af2d92d1cee28514_000001.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>10_test-00000-of-00001_000003.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> FATURA2-invoices</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\10_test-00000-of-00001_000003.json</p>
+        </section>
+
+        <section class="card warn">
+          <div class="card-head">
+            <h2>11_test-00000-of-00001_000004.png</h2>
+            <span class="badge">draft</span>
+          </div>
+          <p><strong>Dataset:</strong> FATURA2-invoices</p>
+          <div class="bar"><span style="width:0.0%"></span></div>
+          <p><strong>Completion:</strong> 0.0%</p>
+          <p><strong>Missing:</strong> supplier, customer, invoice number, invoice date, currency, subtotal HT, VAT, total TTC, line items</p>
+          <p><strong>Remaining work:</strong></p>
+          <ul><li>fill VAT</li><li>fill currency</li><li>fill customer</li><li>fill invoice date</li><li>fill invoice number</li><li>fill line items</li><li>fill subtotal HT</li><li>fill supplier</li><li>fill total TTC</li><li>open source document and manually review all required fields</li><li>remove blank line-item template rows</li></ul>
+          <p><strong>Label:</strong> labels\11_test-00000-of-00001_000004.json</p>
+        </section>
+
+    </section>
+  </main>
+</body>
+</html>

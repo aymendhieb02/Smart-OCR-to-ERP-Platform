@@ -136,3 +136,42 @@ def test_review_queue_is_generated(tmp_path: Path) -> None:
     campaign.write_review_queue(tmp_path / "queue.html", [document], [valid_label()], [quality])
 
     assert "Download edited label JSON" in (tmp_path / "queue.html").read_text(encoding="utf-8")
+
+
+
+def test_reviewed_status_is_tracked_but_not_accuracy_eligible() -> None:
+    label = valid_label()
+    label["verification_status"] = "reviewed"
+
+    quality = validate_verified_label_quality(label)
+
+    assert quality["verification_status"] == "reviewed"
+    assert quality["eligible_for_accuracy"] is False
+
+
+def test_placeholder_values_are_rejected() -> None:
+    label = valid_label()
+    label["invoice_number"] = "TODO"
+
+    quality = validate_verified_label_quality(label)
+
+    assert any("placeholder value" in error for error in quality["errors"])
+    assert quality["eligible_for_accuracy"] is False
+
+
+def test_verification_summary_reports_remaining_work() -> None:
+    quality = validate_verified_label_quality({"filename": "invoice.png", "verification_status": "draft"})
+    selection = {"documents": [{"filename": "invoice.png", "dataset": "sample"}]}
+    validation = {
+        "selected_document_count": 1,
+        "expected_document_count": 10,
+        "complete_verified_documents": 0,
+        "accuracy_claims_allowed": False,
+        "documents": [quality],
+    }
+
+    summary = campaign.build_verification_summary(selection, validation)
+
+    assert summary["status_counts"]["draft"] == 1
+    assert summary["accuracy_claims_allowed"] is False
+    assert summary["remaining_documents"][0]["remaining_work"]

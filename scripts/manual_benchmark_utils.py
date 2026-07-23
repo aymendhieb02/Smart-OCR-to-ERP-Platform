@@ -49,7 +49,22 @@ REQUIRED_FIELD_NAMES = [
 ]
 
 FINANCIAL_FIELD_NAMES = ["amount_ht", "tax_amount", "amount_ttc", "tax_rate"]
-VERIFICATION_STATUSES = {"draft", "partially_verified", "verified", "rejected"}
+VERIFICATION_STATUSES = {"draft", "reviewed", "partially_verified", "verified", "rejected"}
+PLACEHOLDER_VALUES = {
+    "todo",
+    "tbd",
+    "unknown",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "placeholder",
+    "replace me",
+    "a completer",
+    "a verifier",
+    "-",
+    "--",
+}
 STRICT_REQUIRED_FIELD_NAMES = [
     "supplier_name",
     "customer_name",
@@ -407,6 +422,8 @@ def validate_verified_label_quality(label: dict[str, Any], *, label_path: Path |
     for field, value in iter_label_values(label):
         if value == "":
             errors.append(f"empty string is not allowed: {field}")
+        if is_placeholder_value(value):
+            errors.append(f"placeholder value is not allowed: {field}")
 
     for field in STRICT_REQUIRED_FIELD_NAMES:
         value = label.get(field)
@@ -468,6 +485,12 @@ def validate_verified_label_quality(label: dict[str, Any], *, label_path: Path |
         "line_items_blank_template_rows": len(blank_templates),
         "totals_consistent": totals_consistent,
     }
+
+
+def is_placeholder_value(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return normalize_text(value) in PLACEHOLDER_VALUES
 
 
 def meaningful_line_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -535,7 +558,7 @@ def normalize_currency(value: Any) -> str | None:
     if value in (None, ""):
         return None
     text = str(value).strip().upper()
-    mapping = {"$": "USD", "US$": "USD", "€": "EUR", "EUR": "EUR", "TND": "TND", "DT": "TND", "د.ت": "TND", "£": "GBP"}
+    mapping = {"$": "USD", "US$": "USD", "â‚¬": "EUR", "EUR": "EUR", "TND": "TND", "DT": "TND", "Ø¯.Øª": "TND", "Â£": "GBP"}
     return mapping.get(text, text[:3] if len(text) >= 3 else text)
 
 
