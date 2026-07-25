@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -11,10 +9,7 @@ from app.core.config import settings
 
 
 OFFICIAL_REPOSITORY = "https://github.com/microsoft/table-transformer"
-STRUCTURE_MODEL_URL = (
-    "https://huggingface.co/microsoft/table-transformer-structure-recognition/"
-    "resolve/main/pytorch_model.bin"
-)
+OFFICIAL_STRUCTURE_MODEL_ID = "microsoft/table-transformer-structure-recognition"
 
 
 @dataclass
@@ -68,34 +63,28 @@ class TableTransformerLoader:
             return TableTransformerLoadResult(False, device="cuda", model_path=self.model_path, error="CUDA requested but not available")
 
         try:
-            weight_path, downloaded = self.ensure_weights(download=download)
-            model_dir = weight_path.parent
-            processor = AutoImageProcessor.from_pretrained(str(model_dir), local_files_only=True)
-            model = TableTransformerForObjectDetection.from_pretrained(str(model_dir), local_files_only=True)
+            cache_dir = self.model_path
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            downloaded = not _has_hf_snapshot(cache_dir)
+            processor = AutoImageProcessor.from_pretrained(
+                OFFICIAL_STRUCTURE_MODEL_ID,
+                cache_dir=str(cache_dir),
+                local_files_only=not download,
+            )
+            model = TableTransformerForObjectDetection.from_pretrained(
+                OFFICIAL_STRUCTURE_MODEL_ID,
+                cache_dir=str(cache_dir),
+                local_files_only=not download,
+            )
             model.to(self.device)
             model.eval()
-            return TableTransformerLoadResult(True, model=model, processor=processor, device=self.device, model_path=model_dir, downloaded=downloaded)
+            return TableTransformerLoadResult(True, model=model, processor=processor, device=self.device, model_path=cache_dir, downloaded=downloaded)
         except Exception as exc:
             return TableTransformerLoadResult(False, device=self.device, model_path=self.model_path, error=str(exc))
 
-    def ensure_weights(self, *, download: bool = True) -> tuple[Path, bool]:
-        self.model_path.mkdir(parents=True, exist_ok=True)
-        weight_path = self.model_path / "pytorch_model.bin"
-        config_path = self.model_path / "config.json"
-        preprocessor_path = self.model_path / "preprocessor_config.json"
-        if weight_path.exists() and config_path.exists() and preprocessor_path.exists():
-            return weight_path, False
-        if not download:
-            raise FileNotFoundError(f"Table Transformer weights missing in {self.model_path}")
-        # Store minimal metadata beside official weights. In most environments
-        # users will populate the folder through HuggingFace/transformers cache;
-        # this direct download path keeps the integration self-contained.
-        urllib.request.urlretrieve(STRUCTURE_MODEL_URL, weight_path)
-        if not config_path.exists():
-            config_path.write_text('{"model_type":"table-transformer"}', encoding="utf-8")
-        if not preprocessor_path.exists():
-            preprocessor_path.write_text('{"do_resize":true}', encoding="utf-8")
-        return weight_path, True
+
+def _has_hf_snapshot(cache_dir: Path) -> bool:
+    return any(cache_dir.glob("models--microsoft--table-transformer-structure-recognition/snapshots/*"))
 
 
 def _normalize_device(value: str) -> str:

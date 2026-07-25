@@ -36,3 +36,6 @@ dataset/**/reports/
 Thumbs.db
 .vscode/
 .idea/
+
+# Optional local model caches
+models/table_transformer/

@@ -14,7 +14,7 @@ extraction behavior.
 
 ## Dependencies
 
-The optional experiment adds `torch`, `torchvision`, `Pillow`, and `psutil`.
+The optional experiment adds `torch`, `torchvision`, `transformers`, `timm`, `Pillow`, and `psutil`.
 They are not imported by production code paths unless the experimental package is
 used.
 
