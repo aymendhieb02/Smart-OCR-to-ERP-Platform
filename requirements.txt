@@ -13,3 +13,9 @@ pytesseract>=0.3.10
 pytest>=8.2.0
 httpx>=0.27.0
 matplotlib>=3.8.0
+# Optional Microsoft Table Transformer experiment (OFF by default)
+torch>=2.2.0
+torchvision>=0.17.0
+Pillow>=10.0.0
+psutil>=5.9.0
+transformers>=4.42.0

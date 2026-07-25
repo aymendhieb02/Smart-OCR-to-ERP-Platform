@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     ocr_preprocessing_profile: str = "current"
     ocr_input_max_side: int | None = 1600
     table_reconstruction_profile: str = "p3_stable"
+    enable_table_transformer: bool = False
+    table_transformer_device: str = "cpu"
+    table_transformer_model_path: Path = Path("models/table_transformer")
+    table_transformer_confidence: float = 0.75
+    table_transformer_max_tables: int = 10
+    table_transformer_cache_dir: Path = Path("outputs/cache/table_transformer")
+    table_transformer_debug_dir: Path = Path("dataset/reports/table_transformer_debug")
     enable_llm_resolver: bool = False
     llm_resolver_mode: str = "advisory"
     llm_resolver_model: str = "qwen2.5-coder:7b"
