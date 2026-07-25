@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     enable_table_transformer: bool = False
     table_transformer_device: str = "cpu"
     table_transformer_model_path: Path = Path("models/table_transformer")
+    table_transformer_detection_model_path: Path = Path("models/table_transformer_detection")
     table_transformer_confidence: float = 0.75
+    table_transformer_detection_confidence: float | None = None
     table_transformer_max_tables: int = 10
     table_transformer_cache_dir: Path = Path("outputs/cache/table_transformer")
     table_transformer_debug_dir: Path = Path("dataset/reports/table_transformer_debug")

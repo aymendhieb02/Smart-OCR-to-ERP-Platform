@@ -9,6 +9,7 @@ from app.core.config import settings
 
 
 OFFICIAL_REPOSITORY = "https://github.com/microsoft/table-transformer"
+OFFICIAL_DETECTION_MODEL_ID = "microsoft/table-transformer-detection"
 OFFICIAL_STRUCTURE_MODEL_ID = "microsoft/table-transformer-structure-recognition"
 
 
@@ -24,20 +25,19 @@ class TableTransformerLoadResult:
     source: str = OFFICIAL_REPOSITORY
 
 
-class TableTransformerLoader:
-    """Lazy singleton loader for the optional TATR structure model.
-
-    The implementation is deliberately defensive: missing torch/transformers or
-    missing weights return an unavailable result instead of breaking production
-    invoice extraction.
-    """
+class _BaseTableTransformerLoader:
+    """Defensive lazy singleton loader for optional TATR models."""
 
     _lock = Lock()
     _singleton: TableTransformerLoadResult | None = None
+    model_id = OFFICIAL_STRUCTURE_MODEL_ID
 
     def __init__(self, model_path: Path | None = None, device: str | None = None) -> None:
-        self.model_path = Path(model_path or settings.table_transformer_model_path)
+        self.model_path = Path(model_path or self.default_model_path())
         self.device = _normalize_device(device or settings.table_transformer_device)
+
+    def default_model_path(self) -> Path:
+        return settings.table_transformer_model_path
 
     def load(self, *, download: bool = True) -> TableTransformerLoadResult:
         with self._lock:
@@ -65,26 +65,57 @@ class TableTransformerLoader:
         try:
             cache_dir = self.model_path
             cache_dir.mkdir(parents=True, exist_ok=True)
-            downloaded = not _has_hf_snapshot(cache_dir)
+            downloaded = not _has_hf_snapshot(cache_dir, self.model_id)
             processor = AutoImageProcessor.from_pretrained(
-                OFFICIAL_STRUCTURE_MODEL_ID,
+                self.model_id,
                 cache_dir=str(cache_dir),
                 local_files_only=not download,
             )
             model = TableTransformerForObjectDetection.from_pretrained(
-                OFFICIAL_STRUCTURE_MODEL_ID,
+                self.model_id,
                 cache_dir=str(cache_dir),
                 local_files_only=not download,
             )
             model.to(self.device)
             model.eval()
-            return TableTransformerLoadResult(True, model=model, processor=processor, device=self.device, model_path=cache_dir, downloaded=downloaded)
+            return TableTransformerLoadResult(
+                True,
+                model=model,
+                processor=processor,
+                device=self.device,
+                model_path=cache_dir,
+                downloaded=downloaded,
+                source=self.model_id,
+            )
         except Exception as exc:
             return TableTransformerLoadResult(False, device=self.device, model_path=self.model_path, error=str(exc))
 
 
-def _has_hf_snapshot(cache_dir: Path) -> bool:
-    return any(cache_dir.glob("models--microsoft--table-transformer-structure-recognition/snapshots/*"))
+class TableTransformerLoader(_BaseTableTransformerLoader):
+    """Lazy singleton loader for the optional TATR structure-recognition model."""
+
+    _lock = Lock()
+    _singleton: TableTransformerLoadResult | None = None
+    model_id = OFFICIAL_STRUCTURE_MODEL_ID
+
+    def default_model_path(self) -> Path:
+        return settings.table_transformer_model_path
+
+
+class TableDetectionLoader(_BaseTableTransformerLoader):
+    """Lazy singleton loader for the optional TATR full-page table detector."""
+
+    _lock = Lock()
+    _singleton: TableTransformerLoadResult | None = None
+    model_id = OFFICIAL_DETECTION_MODEL_ID
+
+    def default_model_path(self) -> Path:
+        return settings.table_transformer_detection_model_path
+
+
+def _has_hf_snapshot(cache_dir: Path, model_id: str) -> bool:
+    cache_name = "models--" + model_id.replace("/", "--")
+    return any((cache_dir / cache_name / "snapshots").glob("*"))
 
 
 def _normalize_device(value: str) -> str:

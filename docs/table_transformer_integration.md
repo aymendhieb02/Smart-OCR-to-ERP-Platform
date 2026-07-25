@@ -22,3 +22,9 @@ used.
 
 This integration is an experiment. It should not become default until verified
 benchmarks show reliable gains over P3 Stable for exact row count and row content.
+
+## Two-stage detection note
+
+The optional Table Transformer path uses microsoft/table-transformer-detection on the full page, then runs microsoft/table-transformer-structure-recognition only on padded table crops. Crop-relative row/column/cell boxes are remapped back into full-page coordinates before OCR lines are assigned to cells. INVOICE_OCR_TABLE_TRANSFORMER_MAX_TABLES caps page-level table detections, not structure boxes.
+
+Additional settings: INVOICE_OCR_TABLE_TRANSFORMER_DETECTION_MODEL_PATH and INVOICE_OCR_TABLE_TRANSFORMER_DETECTION_CONFIDENCE.

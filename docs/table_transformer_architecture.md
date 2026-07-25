@@ -17,3 +17,7 @@ flowchart TD
 
 The experimental detector never performs OCR. It consumes the existing page
 image and maps existing OCR lines into detected or inferred cells.
+
+## Two-stage model flow
+
+The experimental path is now page detector -> padded table crop -> structure recognizer -> full-page coordinate remap -> OCR-to-cell mapper. If either optional model is unavailable, the existing geometry fallback is used and P3 Stable remains the production default.
