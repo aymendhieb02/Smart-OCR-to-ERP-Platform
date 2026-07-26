@@ -4,7 +4,9 @@ import math
 import re
 from collections import defaultdict
 
+from app.core.config import settings
 from app.core.schemas import BoundingBox, LayoutBlock, OCRLine
+from app.utils.fuzzy_keywords import keyword_matches
 from app.utils.helpers import parse_amount, strip_accents
 
 
@@ -126,7 +128,7 @@ class LayoutAnalyzer:
         matches = []
         for block in self.blocks:
             normalized = strip_accents(block.text).lower()
-            if any(re.search(strip_accents(label).lower(), normalized) for label in labels):
+            if keyword_matches(normalized, labels, threshold=settings.layout_fuzzy_threshold):
                 matches.append(block)
         return matches
 
@@ -153,7 +155,7 @@ class LayoutAnalyzer:
 
     def _contains(self, block: OCRLine, labels: list[str]) -> bool:
         normalized = strip_accents(block.text).lower()
-        return any(strip_accents(label).lower() in normalized for label in labels)
+        return keyword_matches(normalized, labels, threshold=settings.layout_fuzzy_threshold)
 
     def _build_layout_block(self, block_type: str, blocks: list[OCRLine], confidence: float | None = None) -> LayoutBlock:
         boxes = [block.bbox for block in blocks if block.bbox]

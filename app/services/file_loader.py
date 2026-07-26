@@ -5,12 +5,13 @@ from tempfile import NamedTemporaryFile
 import cv2
 import fitz
 import numpy as np
+from PIL import Image
 from fastapi import UploadFile
 
 from app.utils.helpers import normalize_text
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".jfif", ".png", ".tif", ".tiff", ".bmp", ".avif"}
 
 
 @dataclass
@@ -39,6 +40,8 @@ def load_document(path: Path, original_filename: str | None = None, timing_recor
 
     if extension == ".pdf":
         return _load_pdf(path, original_filename or path.name, timing_recorder=timing_recorder)
+    if extension == ".avif":
+        return _load_avif(path, original_filename or path.name, timing_recorder=timing_recorder)
     return _load_image(path, original_filename or path.name, timing_recorder=timing_recorder)
 
 
@@ -76,7 +79,23 @@ def _load_image(path: Path, source_file: str, timing_recorder=None) -> LoadedDoc
     with context:
         image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
-        raise ValueError("Unreadable image file")
+        raise ValueError(f"decode_error: unreadable image file ({path.suffix.lower()})")
+    return LoadedDocument(source_file=source_file, extension=path.suffix.lower(), images=[image])
+
+
+def _load_avif(path: Path, source_file: str, timing_recorder=None) -> LoadedDocument:
+    context = timing_recorder.stage("image_decoding", input_type=path.suffix.lower()) if timing_recorder else _noop_stage()
+    with context:
+        try:
+            import pillow_avif  # noqa: F401
+        except Exception as exc:
+            raise ValueError(f"decode_error: AVIF decoder unavailable: {exc}") from exc
+        try:
+            with Image.open(path) as pil_image:
+                rgb = pil_image.convert("RGB")
+                image = cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR)
+        except Exception as exc:
+            raise ValueError(f"decode_error: unreadable AVIF image: {exc}") from exc
     return LoadedDocument(source_file=source_file, extension=path.suffix.lower(), images=[image])
 
 

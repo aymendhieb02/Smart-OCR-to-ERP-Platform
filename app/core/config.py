@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     table_transformer_max_tables: int = 10
     table_transformer_cache_dir: Path = Path("outputs/cache/table_transformer")
     table_transformer_debug_dir: Path = Path("dataset/reports/table_transformer_debug")
+    enable_layout_model: bool = False
+    layout_model_path: Path = Path("models/layout_model")
+    layout_model_confidence: float = 0.5
+    layout_model_max_regions: int = 40
+    layout_model_device: str = "cpu"
+    layout_fuzzy_threshold: int = 85
+    layout_retry_fuzzy_threshold: int = 74
+    unmapped_ratio_retry_threshold: float = 0.60
+    row_grouping_min_overlap_ratio: float = 0.35
     enable_llm_resolver: bool = False
     llm_resolver_mode: str = "advisory"
     llm_resolver_model: str = "qwen2.5-coder:7b"

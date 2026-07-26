@@ -3,6 +3,8 @@
 import re
 
 from app.services.document_graph import DocumentGraph, DocumentNode
+from app.core.config import settings
+from app.utils.fuzzy_keywords import keyword_matches, matched_keywords
 from app.utils.helpers import parse_amount, strip_accents
 
 COMPANY_SUFFIXES = (
@@ -65,7 +67,7 @@ def classify_node(node: DocumentNode) -> str:
         return "table_row_text"
     if _is_company_candidate(text):
         return "company_candidate"
-    if any(word in plain for word in ("thank you", "merci", "terms", "conditions", "signature")):
+    if keyword_matches(plain, ("thank you", "merci", "terms", "conditions", "signature"), threshold=settings.layout_fuzzy_threshold):
         return "footer_note"
     return "random_noise" if len(text) <= 3 else "unknown"
 
@@ -104,7 +106,7 @@ def _is_company_candidate(text: str) -> bool:
         return False
     if re.match(r"^\d", text.strip()):
         return False
-    suffix_hit = any(re.search(rf"\b{re.escape(suffix)}\b", plain) for suffix in COMPANY_SUFFIXES)
+    suffix_hit = keyword_matches(plain, COMPANY_SUFFIXES, threshold=settings.layout_fuzzy_threshold)
     uppercase_words = sum(1 for word in re.findall(r"[A-Z][A-Z&.]{1,}", text))
     alpha_words = [
         word
@@ -126,7 +128,7 @@ def _is_company_candidate(text: str) -> bool:
 
 
 def _is_table_header(plain: str) -> bool:
-    keyword_hits = sum(1 for word in TABLE_WORDS if re.search(rf"\b{re.escape(word)}\b", plain))
+    keyword_hits = len(matched_keywords(plain, TABLE_WORDS, threshold=settings.layout_fuzzy_threshold))
     return keyword_hits >= 3 or bool(re.search(r"\bid\s*\|?\s*description\b", plain))
 
 
@@ -198,17 +200,17 @@ def _is_postal_code_only(text: str) -> bool:
 
 def _looks_like_address(text: str) -> bool:
     plain = strip_accents(text).lower()
-    return bool(re.search(r"\d", text) and (any(word in plain for word in ADDRESS_WORDS) or re.search(r"\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b", text.upper())))
+    return bool(re.search(r"\d", text) and (keyword_matches(plain, ADDRESS_WORDS, threshold=settings.layout_fuzzy_threshold) or re.search(r"\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b", text.upper())))
 
 
 def _looks_like_product_row(plain: str) -> bool:
-    if any(word in plain for word in ("subtotal", "total due", "sales tax", "shipping")):
+    if keyword_matches(plain, ("subtotal", "total due", "sales tax", "shipping"), threshold=settings.layout_fuzzy_threshold):
         return False
-    return sum(1 for word in TABLE_WORDS if word in plain) >= 1 and len(re.findall(r"\d", plain)) >= 2
+    return len(matched_keywords(plain, TABLE_WORDS, threshold=settings.layout_fuzzy_threshold)) >= 1 and len(re.findall(r"\d", plain)) >= 2
 
 
 def _has_money_context(plain: str) -> bool:
-    return any(word in plain for word in ("total", "tax", "price", "amount", "subtotal"))
+    return keyword_matches(plain, ("total", "tax", "price", "amount", "subtotal"), threshold=settings.layout_fuzzy_threshold)
 
 
 def _is_low_confidence_noise(node: DocumentNode) -> bool:

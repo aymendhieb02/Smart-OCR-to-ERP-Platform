@@ -603,11 +603,12 @@ def _add_stacked_totals_candidates(add, text: str, blocks: list[OCRLine]) -> Non
         window = " ".join(lines[index + 1:index + 8])
         amounts = _money_values(window)
         if len(amounts) >= 3:
-            add("amount_ht", amounts[0], 0.82, "stacked totals first amount")
-            add("tva_amount", amounts[1], 0.82, "stacked totals middle amount")
-            add("amount_ttc", amounts[-1], 0.86, "stacked totals rightmost/gross amount")
-            if amounts[0]:
-                add("tax_rate", round((amounts[1] / amounts[0]) * 100, 2), 0.80, "stacked totals inferred tax rate")
+            add("amount_ht", amounts[0], 0.62, "stacked totals first amount")
+            add("tva_amount", amounts[1], 0.62, "stacked totals middle amount")
+            add("amount_ttc", amounts[-1], 0.68, "stacked totals rightmost/gross amount")
+            inferred_tax_rate = _infer_plausible_tax_rate(amounts[0], amounts[1])
+            if inferred_tax_rate is not None:
+                add("tax_rate", inferred_tax_rate, 0.58, "stacked totals inferred tax rate")
             if "$" in window:
                 add("currency", "USD", 0.86, "currency in stacked totals")
             return
@@ -615,11 +616,19 @@ def _add_stacked_totals_candidates(add, text: str, blocks: list[OCRLine]) -> Non
     amounts = [parse_amount(block.text) for block in bottom_right if parse_amount(block.text) is not None]
     if len(amounts) >= 3:
         amounts = sorted(amounts)
-        add("amount_ht", amounts[-3], 0.70, "bottom-right totals cluster")
-        add("tva_amount", amounts[-2], 0.70, "bottom-right totals cluster")
-        add("amount_ttc", amounts[-1], 0.76, "bottom-right totals cluster")
-        if amounts[-3]:
-            add("tax_rate", round((amounts[-2] / amounts[-3]) * 100, 2), 0.66, "bottom-right totals inferred tax rate")
+        add("amount_ht", amounts[-3], 0.60, "bottom-right totals cluster")
+        add("tva_amount", amounts[-2], 0.60, "bottom-right totals cluster")
+        add("amount_ttc", amounts[-1], 0.64, "bottom-right totals cluster")
+        inferred_tax_rate = _infer_plausible_tax_rate(amounts[-3], amounts[-2])
+        if inferred_tax_rate is not None:
+            add("tax_rate", inferred_tax_rate, 0.52, "bottom-right totals inferred tax rate")
+
+
+def _infer_plausible_tax_rate(base_amount: float | None, tax_amount: float | None) -> float | None:
+    if base_amount in (None, 0) or tax_amount is None:
+        return None
+    rate = round((float(tax_amount) / float(base_amount)) * 100, 2)
+    return rate if 0 <= rate <= 35 else None
 
 
 def _add_summary_table_candidates(add, blocks: list[OCRLine]) -> None:

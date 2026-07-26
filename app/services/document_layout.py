@@ -4,8 +4,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.config import settings
 from app.core.schemas import BoundingBox, OCRLine
 from app.services.table_reconstruction_engine import reconstruct_line_items as reconstruct_p3_line_items
+from app.utils.fuzzy_keywords import keyword_matches, matched_keywords
 from app.utils.helpers import parse_amount, strip_accents
 
 HEADER_KEYWORDS = ("description", "designation", "item", "product", "quantity", "qty", "qte", "unit", "prix", "price", "total", "amount", "tva", "vat")
@@ -92,7 +94,7 @@ def build_table_extraction_debug(
     header_groups = []
     for header in headers:
         plain = strip_accents(header.text).lower()
-        found = [keyword for keyword in HEADER_KEYWORDS if re.search(rf"\b{re.escape(keyword)}\b", plain)]
+        found = matched_keywords(plain, HEADER_KEYWORDS, threshold=settings.layout_fuzzy_threshold)
         header_groups.append({"text": header.text, "bbox": header.bbox.model_dump(mode="json") if header.bbox else None, "keywords": found, "confidence": header.confidence})
     anchor_candidates = []
     for header in headers:
@@ -186,7 +188,7 @@ def reconstruct_tables(blocks: list[OCRLine], lines: list[OCRVisualLine] | None 
     tables: list[ReconstructedTable] = []
     for header in _header_candidates(lines):
         header_text = strip_accents(header.text).lower()
-        keyword_hits = sum(1 for keyword in HEADER_KEYWORDS if re.search(rf"\b{re.escape(keyword)}\b", header_text))
+        keyword_hits = len(matched_keywords(header_text, HEADER_KEYWORDS, threshold=settings.layout_fuzzy_threshold))
         if keyword_hits < 2 and not re.search(r"\bid\s*\|?\s*description\b", header_text):
             continue
         columns = _infer_columns(header)
@@ -361,7 +363,7 @@ def _reconstruct_text_sequence_table(blocks: list[OCRLine]) -> ReconstructedTabl
 
 def _text_is_table_header(text: str) -> bool:
     plain = strip_accents(text).lower()
-    return sum(1 for keyword in HEADER_KEYWORDS if re.search(rf"\b{re.escape(keyword)}\b", plain)) >= 2
+    return len(matched_keywords(plain, HEADER_KEYWORDS, threshold=settings.layout_fuzzy_threshold)) >= 2
 
 
 def _find_text_table_header(ordered: list[OCRLine]) -> tuple[int | None, list[str]]:
@@ -370,13 +372,13 @@ def _find_text_table_header(ordered: list[OCRLine]) -> tuple[int | None, list[st
         found: list[str] = []
         for item in context:
             plain = strip_accents(item.text).lower()
-            if any(word in plain for word in DESCRIPTION_WORDS):
+            if keyword_matches(plain, DESCRIPTION_WORDS, threshold=settings.layout_fuzzy_threshold):
                 found.append("description")
-            if any(word in plain for word in QUANTITY_WORDS):
+            if keyword_matches(plain, QUANTITY_WORDS, threshold=settings.layout_fuzzy_threshold):
                 found.append("quantity")
-            if any(word in plain for word in PRICE_WORDS):
+            if keyword_matches(plain, PRICE_WORDS, threshold=settings.layout_fuzzy_threshold):
                 found.append("price")
-            if any(word in plain for word in TOTAL_WORDS):
+            if keyword_matches(plain, TOTAL_WORDS, threshold=settings.layout_fuzzy_threshold):
                 found.append("total")
         if len(set(found)) >= 2:
             return index, found
@@ -451,7 +453,7 @@ def _header_candidates(lines: list[OCRVisualLine], y_tolerance: float = 18.0) ->
         ]
         combined_text = " ".join(item.text for item in sorted(same_row, key=lambda item: item.bbox.x1 if item.bbox else 0))
         combined_plain = strip_accents(combined_text).lower()
-        keyword_hits = sum(1 for keyword in HEADER_KEYWORDS if re.search(rf"\b{re.escape(keyword)}\b", combined_plain))
+        keyword_hits = len(matched_keywords(combined_plain, HEADER_KEYWORDS, threshold=settings.layout_fuzzy_threshold))
         aligned_header = len(same_row) >= 3 and keyword_hits >= 2
         if not aligned_header and keyword_hits < 3 and not re.search(r"\bid\s*\|?\s*description\b", combined_plain):
             continue
@@ -490,7 +492,7 @@ def detect_logical_blocks(lines: list[OCRVisualLine], tables: list[Reconstructed
             line for line in lines
             if id(line) not in table_regions
             and not _line_in_table_region(line, table_regions)
-            and any(re.search(rf"\b{re.escape(keyword)}\b", strip_accents(line.text).lower()) for keyword in BLOCK_KEYWORDS[block_type])
+            and keyword_matches(line.text, BLOCK_KEYWORDS[block_type], threshold=settings.layout_fuzzy_threshold)
         ]
         selected = _expand_nearby_lines(lines, selected, block_type)
         if selected:
@@ -596,7 +598,7 @@ def _collect_customer_lines(
         if line in top_lines
         and id(line) not in table_regions
         and not _line_in_table_region(line, table_regions)
-        and any(re.search(rf"\b{re.escape(keyword)}\b", strip_accents(line.text).lower()) for keyword in BLOCK_KEYWORDS["customer"])
+        and keyword_matches(line.text, BLOCK_KEYWORDS["customer"], threshold=settings.layout_fuzzy_threshold)
     ]
     if anchors:
         return _expand_nearby_lines(lines, anchors, "customer")
@@ -612,9 +614,9 @@ def _collect_customer_lines(
 
 
 def _looks_like_product_row(plain: str) -> bool:
-    if any(word in plain for word in FOOTER_WORDS):
+    if keyword_matches(plain, FOOTER_WORDS, threshold=settings.layout_fuzzy_threshold):
         return False
-    has_table_word = any(re.search(rf"\b{re.escape(word)}\b", plain) for word in ("description", "quantity", "qty", "price", "total", "amount"))
+    has_table_word = keyword_matches(plain, ("description", "quantity", "qty", "price", "total", "amount"), threshold=settings.layout_fuzzy_threshold)
     number_count = len(re.findall(r"\d", plain))
     return has_table_word and number_count >= 2
 
@@ -631,25 +633,25 @@ def _infer_columns(header: OCRVisualLine) -> dict[str, dict[str, Any]]:
     for block in header.blocks:
         text = strip_accents(block.text).lower()
         key = None
-        if any(word in text for word in REFERENCE_WORDS):
+        if keyword_matches(text, REFERENCE_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "reference"
-        if any(word in text for word in DESCRIPTION_WORDS):
+        if keyword_matches(text, DESCRIPTION_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "description"
-        elif any(word in text for word in QUANTITY_WORDS):
+        elif keyword_matches(text, QUANTITY_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "quantity"
-        elif "net worth" in text or "net amount" in text:
+        elif keyword_matches(text, ("net worth", "net amount", "total ht", "amount ht"), threshold=settings.layout_fuzzy_threshold):
             key = "line_total_ht"
-        elif "gross worth" in text or "gross total" in text:
+        elif keyword_matches(text, ("gross worth", "gross total", "total ttc", "amount due"), threshold=settings.layout_fuzzy_threshold):
             key = "total"
-        elif any(word in text for word in PRICE_WORDS):
+        elif keyword_matches(text, PRICE_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "unit_price"
-        elif any(word in text for word in UNIT_WORDS):
+        elif keyword_matches(text, UNIT_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "unit"
-        elif any(word in text for word in DISCOUNT_WORDS):
+        elif keyword_matches(text, DISCOUNT_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "discount"
-        elif any(word in text for word in TAX_WORDS):
+        elif keyword_matches(text, TAX_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "tax_rate"
-        elif any(word in text for word in TOTAL_WORDS):
+        elif keyword_matches(text, TOTAL_WORDS, threshold=settings.layout_fuzzy_threshold):
             key = "total"
         if key:
             columns[key] = {"x1": block.bbox.x1, "x2": block.bbox.x2, "center": _center_x(block.bbox), "label": block.text}
@@ -669,7 +671,7 @@ def _infer_columns(header: OCRVisualLine) -> dict[str, dict[str, Any]]:
 
 def _infer_columns_from_combined_header(header: OCRVisualLine) -> dict[str, dict[str, Any]]:
     text = strip_accents(header.text).lower()
-    if sum(1 for keyword in HEADER_KEYWORDS if keyword in text) < 3 or not header.bbox:
+    if len(matched_keywords(text, HEADER_KEYWORDS, threshold=settings.layout_fuzzy_threshold)) < 3 or not header.bbox:
         return {}
     x1 = header.bbox.x1
     width = max(1.0, header.bbox.x2 - header.bbox.x1)
@@ -972,7 +974,7 @@ def _table_stop_y(lines: list[OCRVisualLine]) -> float:
 
 def _is_footer_text(text: str) -> bool:
     plain = strip_accents(text).lower()
-    return any(word in plain for word in FOOTER_WORDS)
+    return keyword_matches(plain, FOOTER_WORDS, threshold=settings.layout_fuzzy_threshold)
 
 
 def _expand_nearby_lines(lines: list[OCRVisualLine], selected: list[OCRVisualLine], block_type: str) -> list[OCRVisualLine]:

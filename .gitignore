@@ -39,3 +39,6 @@ Thumbs.db
 
 # Optional local model caches
 models/table_transformer/
+dataset/unseen_format_test/
+models/table_transformer_detection/
+models/layout_model/

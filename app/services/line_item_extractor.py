@@ -442,11 +442,111 @@ def _center_x(block: OCRLine) -> float:
 def _center_y(block: OCRLine) -> float:
     return (block.bbox.y1 + block.bbox.y2) / 2
 def _group_blocks_by_row(blocks: list[OCRLine]) -> list[list[OCRLine]]:
-    rows: dict[int, list[OCRLine]] = defaultdict(list)
-    for block in blocks:
-        key = round((block.bbox.y1 if block.bbox else 0) / 18)
-        rows[key].append(block)
-    return [sorted(values, key=lambda block: block.bbox.x1 if block.bbox else 0) for _, values in sorted(rows.items())]
+    positioned = [block for block in blocks if block.bbox]
+    if not positioned:
+        return []
+    typical_height = _typical_block_height(positioned)
+    anchors = _numeric_row_anchors(positioned, typical_height)
+    if not anchors:
+        return _group_blocks_by_adaptive_center(positioned, typical_height)
+
+    rows: list[dict[str, object]] = []
+    for anchor_group in anchors:
+        center = sum(_center_y(block) for block in anchor_group) / len(anchor_group)
+        rows.append({"center": center, "blocks": list(anchor_group)})
+
+    assigned = {id(block) for group in anchors for block in group}
+    sorted_rows = sorted(rows, key=lambda row: float(row["center"]))
+    for block in sorted(positioned, key=lambda item: (item.bbox.y1, item.bbox.x1)):
+        if id(block) in assigned:
+            continue
+        target = _row_for_block(block, sorted_rows, typical_height)
+        target["blocks"].append(block)
+
+    return [
+        sorted(row["blocks"], key=lambda block: (block.bbox.x1 if block.bbox else 0, block.bbox.y1 if block.bbox else 0))
+        for row in sorted_rows
+    ]
+
+
+def _typical_block_height(blocks: list[OCRLine]) -> float:
+    heights = sorted(
+        max(1.0, block.bbox.y2 - block.bbox.y1)
+        for block in blocks
+        if block.bbox
+    )
+    if not heights:
+        return 18.0
+    return heights[len(heights) // 2]
+
+
+def _numeric_row_anchors(blocks: list[OCRLine], typical_height: float) -> list[list[OCRLine]]:
+    numeric_blocks = [
+        block for block in blocks
+        if _is_numeric_row_anchor(block, typical_height)
+    ]
+    numeric_blocks = sorted(numeric_blocks, key=lambda block: (_center_y(block), block.bbox.x1))
+    groups: list[list[OCRLine]] = []
+    tolerance = max(typical_height * 0.65, 6.0)
+    for block in numeric_blocks:
+        center = _center_y(block)
+        target = next((group for group in groups if abs(_average_block_center_y(group) - center) <= tolerance), None)
+        if target is None:
+            groups.append([block])
+        else:
+            target.append(block)
+    return [group for group in groups if len(group) >= 2]
+
+
+def _is_numeric_row_anchor(block: OCRLine, typical_height: float) -> bool:
+    if not block.bbox:
+        return False
+    value = parse_amount(block.text.replace("%", ""))
+    if value is None:
+        return False
+    height = block.bbox.y2 - block.bbox.y1
+    return height <= max(typical_height * 1.8, typical_height + 8.0)
+
+
+def _group_blocks_by_adaptive_center(blocks: list[OCRLine], typical_height: float) -> list[list[OCRLine]]:
+    rows: list[list[OCRLine]] = []
+    tolerance = max(typical_height * 0.75, 8.0)
+    for block in sorted(blocks, key=lambda item: (_center_y(item), item.bbox.x1)):
+        center = _center_y(block)
+        target = next((row for row in rows if abs(_average_block_center_y(row) - center) <= tolerance), None)
+        if target is None:
+            rows.append([block])
+        else:
+            target.append(block)
+    return [sorted(row, key=lambda block: block.bbox.x1 if block.bbox else 0) for row in rows]
+
+
+def _row_for_block(block: OCRLine, rows: list[dict[str, object]], typical_height: float) -> dict[str, object]:
+    center = _center_y(block)
+    row_centers = [float(row["center"]) for row in rows]
+    for index, row in enumerate(rows):
+        upper = (row_centers[index - 1] + row_centers[index]) / 2 if index else float("-inf")
+        lower = (row_centers[index] + row_centers[index + 1]) / 2 if index + 1 < len(row_centers) else float("inf")
+        if upper <= center < lower:
+            return row
+        if _vertical_overlap_ratio(block, row) >= settings.row_grouping_min_overlap_ratio:
+            return row
+    return min(rows, key=lambda row: abs(float(row["center"]) - center))
+
+
+def _vertical_overlap_ratio(block: OCRLine, row: dict[str, object]) -> float:
+    blocks = [item for item in row["blocks"] if item.bbox]
+    if not blocks or not block.bbox:
+        return 0.0
+    y1 = min(item.bbox.y1 for item in blocks)
+    y2 = max(item.bbox.y2 for item in blocks)
+    overlap = max(0.0, min(block.bbox.y2, y2) - max(block.bbox.y1, y1))
+    height = max(1.0, block.bbox.y2 - block.bbox.y1)
+    return overlap / height
+
+
+def _average_block_center_y(blocks: list[OCRLine]) -> float:
+    return sum(_center_y(block) for block in blocks if block.bbox) / max(1, len(blocks))
 
 
 def _is_table_header(lower_text: str) -> bool:

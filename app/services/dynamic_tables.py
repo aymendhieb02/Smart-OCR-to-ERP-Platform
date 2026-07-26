@@ -357,6 +357,15 @@ def _unmapped_text_table(layout_blocks: list[LayoutBlock], ocr_blocks: list[OCRL
     )
 
 
+def compute_unmapped_ocr_ratio(layout_blocks: list[LayoutBlock], ocr_blocks: list[OCRLine]) -> float:
+    mapped_blocks = [block for block in layout_blocks if block.block_type != "unknown"]
+    positioned = [block for block in ocr_blocks if block.bbox is not None]
+    if not positioned:
+        return 0.0
+    unmapped = [block for block in positioned if not _is_inside_any_block(block, mapped_blocks)]
+    return round(len(unmapped) / len(positioned), 4)
+
+
 def _field_row(
     key: str,
     detail: FieldExtractionDetail,

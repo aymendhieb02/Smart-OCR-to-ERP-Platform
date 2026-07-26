@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import time
 
+from app.core.config import settings
 from app.core.schemas import OCRLine, OCRResult, ProcessInvoiceResponse
 from app.services.bbox_contract import apply_public_bbox_contract, bbox_loss_stage, count_public_ocr_boxes
 from app.services.document_classifier import classify_document
 from app.services.document_layout import analyze_document_layout
-from app.services.dynamic_tables import build_dynamic_review_payload
+from app.services.dynamic_tables import build_dynamic_review_payload, compute_unmapped_ocr_ratio
 from app.services.erp_mapper import build_erp_json, map_to_flat_erp
 from app.services.extraction_quality import apply_extraction_quality_gate, build_validated_erp_json
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
@@ -15,6 +16,7 @@ from app.services.field_extractor import extract_with_candidates
 from app.services.file_loader import load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
+from app.services.layout_model.layout_model_router import detect_layout_blocks_with_model
 from app.services.ocr_engine import OCREngine
 from app.services.ocr_fallback_planner import determine_required_fallbacks
 from app.services.preview_generator import generate_document_preview
@@ -96,8 +98,13 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
 
     stage_started = time.perf_counter()
     layout_analyzer = LayoutAnalyzer(ocr_result.lines)
+    layout_model_debug: dict[str, Any] = {"enabled": False}
+    layout_retry_debug: dict[str, Any] = {"attempted": False}
     with _timer_stage(timer, "semantic_block_detection"):
-        layout_blocks = layout_analyzer.detect_layout_blocks()
+        model_layout_blocks, layout_model_debug = detect_layout_blocks_with_model(document.images, ocr_result.lines)
+        layout_blocks = model_layout_blocks or layout_analyzer.detect_layout_blocks()
+        if not model_layout_blocks:
+            layout_blocks, layout_retry_debug = _retry_layout_if_unmapped(layout_analyzer, layout_blocks, ocr_result.lines)
     with _timer_stage(timer, "layout_analysis"):
         layout_debug = analyze_document_layout(ocr_result.lines)
     timings["layout_analysis"] = round(time.perf_counter() - stage_started, 4)
@@ -117,7 +124,10 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
                 ocr_result = _merge_ocr_result(ocr_result, fallback_lines)
                 layout_analyzer = LayoutAnalyzer(ocr_result.lines)
                 with _timer_stage(timer, "semantic_block_detection", fallback=True):
-                    layout_blocks = layout_analyzer.detect_layout_blocks()
+                    model_layout_blocks, layout_model_debug = detect_layout_blocks_with_model(document.images, ocr_result.lines)
+                    layout_blocks = model_layout_blocks or layout_analyzer.detect_layout_blocks()
+                    if not model_layout_blocks:
+                        layout_blocks, layout_retry_debug = _retry_layout_if_unmapped(layout_analyzer, layout_blocks, ocr_result.lines)
                 with _timer_stage(timer, "layout_analysis", fallback=True):
                     layout_debug = analyze_document_layout(ocr_result.lines)
                 classification = classify_document(ocr_result.raw_text, ocr_result.lines)
@@ -140,6 +150,8 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
     field_boxes = build_field_boxes(expanded_fields)
     extraction_debug["layout_analysis"] = layout_debug
+    extraction_debug["layout_model"] = layout_model_debug
+    extraction_debug["layout_retry"] = layout_retry_debug
     with _timer_stage(timer, "financial_validation", part="validate_invoice"):
         validation = validate_invoice(fields, ocr_result, classification)
     timings["table_extraction"] = round(time.perf_counter() - stage_started, 4)
@@ -321,6 +333,32 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     response.extraction_debug["stage_timings"] = timings
     _set_result_timer_metadata(timer, response, candidates)
     return response
+
+
+def _retry_layout_if_unmapped(layout_analyzer: LayoutAnalyzer, layout_blocks: list, ocr_lines: list[OCRLine]) -> tuple[list, dict[str, Any]]:
+    initial_ratio = compute_unmapped_ocr_ratio(layout_blocks, ocr_lines)
+    threshold = float(settings.unmapped_ratio_retry_threshold or 0.60)
+    debug: dict[str, Any] = {
+        "attempted": False,
+        "initial_unmapped_ratio": initial_ratio,
+        "threshold": threshold,
+    }
+    if initial_ratio <= threshold:
+        return layout_blocks, debug
+    original_threshold = settings.layout_fuzzy_threshold
+    try:
+        settings.layout_fuzzy_threshold = int(settings.layout_retry_fuzzy_threshold or original_threshold)
+        retry_blocks = layout_analyzer.detect_layout_blocks()
+    finally:
+        settings.layout_fuzzy_threshold = original_threshold
+    retry_ratio = compute_unmapped_ocr_ratio(retry_blocks, ocr_lines)
+    debug.update({
+        "attempted": True,
+        "retry_threshold": settings.layout_retry_fuzzy_threshold,
+        "retry_unmapped_ratio": retry_ratio,
+        "accepted": retry_ratio < initial_ratio,
+    })
+    return (retry_blocks if retry_ratio < initial_ratio else layout_blocks), debug
 
 
 def _average(values: list[float | None], default: float = 0.0) -> float:

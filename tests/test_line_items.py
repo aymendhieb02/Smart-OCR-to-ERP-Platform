@@ -72,3 +72,52 @@ def test_wrapped_invoice_table_rows_are_extracted_from_ocr_boxes():
     assert items[1].description.endswith("10%")
     assert items[4].description.endswith("boxed")
     assert sum(item.line_total_ttc for item in items) == 194
+
+
+def test_adaptive_row_grouping_keeps_wrapped_description_with_numeric_cells():
+    from app.core.schemas import BoundingBox, OCRLine
+    from app.services.line_item_extractor import _group_blocks_by_row, _parse_coordinate_row
+
+    def ocr(text, x1, y1, x2, y2, index):
+        return OCRLine(
+            text=text,
+            confidence=0.95,
+            page_number=1,
+            line_index=index,
+            bbox=BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2),
+        )
+
+    blocks = [
+        ocr("Complex medical kit", 80, 136, 260, 150, 1),
+        ocr("with sterile refill", 80, 154, 250, 168, 2),
+        ocr("and transport pouch", 80, 172, 260, 186, 3),
+        ocr("15", 410, 154, 438, 168, 4),
+        ocr("58.9617", 500, 154, 570, 168, 5),
+        ocr("884.426", 610, 154, 690, 168, 6),
+        ocr("19%", 720, 154, 760, 168, 7),
+        ocr("1052.467", 790, 154, 870, 168, 8),
+        ocr("Simple gloves", 80, 214, 210, 228, 9),
+        ocr("2", 410, 214, 438, 228, 10),
+        ocr("10.000", 500, 214, 570, 228, 11),
+        ocr("20.000", 610, 214, 690, 228, 12),
+        ocr("19%", 720, 214, 760, 228, 13),
+        ocr("23.800", 790, 214, 870, 228, 14),
+    ]
+
+    rows = _group_blocks_by_row(blocks)
+    items = [_parse_coordinate_row(row) for row in rows]
+    items = [item for item in items if item is not None]
+
+    assert len(items) == 2
+    assert items[0].description == "Complex medical kit with sterile refill and transport pouch"
+    assert items[0].quantity == 15
+    assert items[0].unit_price == 58.9617
+    assert items[0].line_total_ht == 884.426
+    assert items[0].tax_rate == 19
+    assert items[0].line_total_ttc == 1052.467
+    assert items[1].description == "Simple gloves"
+    assert items[1].quantity == 2
+    assert items[1].unit_price == 10
+    assert items[1].line_total_ht == 20
+    assert items[1].tax_rate == 19
+    assert items[1].line_total_ttc == 23.8

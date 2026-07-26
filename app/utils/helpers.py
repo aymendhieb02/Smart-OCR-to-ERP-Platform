@@ -47,7 +47,7 @@ def parse_amount(value: str | None) -> float | None:
     elif "," in cleaned:
         cleaned = cleaned.replace(",", ".")
     try:
-        return round(float(sign + cleaned), 3)
+        return float(sign + cleaned)
     except ValueError:
         return None
 
