@@ -31,7 +31,6 @@ from app.services.duplicate_detector import detect_duplicates
 from app.services.fraud_indicators import detect_fraud_indicators
 from app.services.invoice_validation_report import build_invoice_validation_report
 from app.services.performance_timer import PipelineTimer
-from app.services.llm_router import resolve_if_needed
 from app.services.review_assistant import build_review_assistant
 
 
@@ -317,11 +316,14 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             fraud_indicators=fraud,
         )
         apply_public_bbox_contract(response)
-        llm_route = resolve_if_needed(response)
-        response.extraction_debug["hybrid_llm"] = llm_route.to_debug_dict()
-        if llm_route.final_response is not None:
-            response = llm_route.final_response
+        if settings.enable_llm_resolver:
+            from app.services.llm_router import resolve_if_needed
+
+            llm_route = resolve_if_needed(response)
             response.extraction_debug["hybrid_llm"] = llm_route.to_debug_dict()
+            if llm_route.final_response is not None:
+                response = llm_route.final_response
+                response.extraction_debug["hybrid_llm"] = llm_route.to_debug_dict()
         response.review_assistant = build_review_assistant(response)
     timings["public_boxes_count"] = count_public_ocr_boxes(response)
     timings["bbox_loss_stage"] = bbox_loss_stage(response)

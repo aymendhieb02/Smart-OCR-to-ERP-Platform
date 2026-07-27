@@ -2,7 +2,7 @@
 
 Smart OCR-to-ERP Platform is a production-style FastAPI document intelligence system for extracting invoice data, validating it, reviewing uncertain values, and exporting ERP-ready JSON.
 
-The platform is built around a deterministic OCR and extraction pipeline. It also includes an optional, evidence-grounded local LLM advisory layer for low-confidence review cases. The LLM does not replace OCR, deterministic extraction, validation, or human approval.
+The production workflow is deterministic by default. It uses OCR, layout understanding, candidate scoring, financial validation, and human review instead of relying on a generative model for ERP decisions.
 
 ## Project Overview
 
@@ -17,7 +17,7 @@ Most OCR demos stop at text recognition. This project goes further:
 - blocks unsafe ERP export;
 - gives reviewers a visual UI with editable fields and line rows;
 - stores correction evidence;
-- provides deterministic, hybrid, and multi-dataset benchmark tooling.
+- provides deterministic benchmark tooling for datasets and regression testing.
 
 The operating principle is simple: automate what is reliable, review what is uncertain, and never push weak data silently into ERP.
 
@@ -25,33 +25,32 @@ The operating principle is simple: automate what is reliable, review what is unc
 
 ```mermaid
 flowchart TD
-    A["Invoice / delivery note / receipt"] --> B["OCR"]
-    B --> C["Layout graph"]
-    C --> D["Semantic blocks"]
-    D --> E["Deterministic extraction"]
-    E --> F["Validation"]
-    F --> G["ERP readiness"]
-    G --> H{"Needs advisory review?"}
-    H -->|No| I["ERP JSON / review response"]
-    H -->|Yes| J["Optional local LLM advisory review"]
-    J --> K["Safety correction gate"]
-    K --> L["Human review"]
-    L --> F
+    A["Invoice / delivery note / receipt"] --> B["File loading and preview generation"]
+    B --> C["OCR with bbox preservation"]
+    C --> D["Layout graph and semantic blocks"]
+    D --> E["Deterministic field extraction"]
+    E --> F["Table and line-item reconstruction"]
+    F --> G["Financial validation"]
+    G --> H["ERP readiness gate"]
+    H --> I{"Safe for ERP export?"}
+    I -->|Yes| J["ERP JSON"]
+    I -->|No| K["Human review UI"]
+    K --> L["Corrections and validation refresh"]
+    L --> H
 ```
 
-## Safety Principles
+## Why The Main System Is Deterministic
 
-- LLM support is optional and disabled by default.
-- Advisory mode is the recommended deployment mode.
-- The LLM never replaces OCR.
-- The LLM receives structured evidence JSON, not raw uncontrolled OCR dumps.
-- Proposals require evidence references.
-- Unsupported corrections are rejected.
-- Protected high-confidence deterministic values are not overwritten silently.
-- Deterministic validation runs again after correction.
-- Auto-apply remains disabled for the advisory release.
-- ERP readiness remains deterministic.
-- Human review stays in control.
+ERP extraction needs traceability more than creative reasoning. The production pipeline avoids generative correction in the normal request path because deterministic extraction is:
+
+- faster and cheaper;
+- easier to benchmark;
+- easier to explain to a jury or auditor;
+- safer for financial totals and VAT;
+- independent of local model availability;
+- fully tied to OCR/layout evidence and validation rules.
+
+An experimental local LLM advisory module remains in the repository for research only. It is disabled by default, not part of the normal UI/demo flow, and cannot bypass deterministic validation.
 
 ## Core Capabilities
 
@@ -114,21 +113,7 @@ The browser review workspace supports:
 
 ![Review UI](docs/screenshots/landing_upload.png)
 
-### Hybrid LLM Advisory Layer
-
-The hybrid layer is a fallback decision assistant, not a replacement extractor.
-
-Current release policy:
-
-- use `hybrid_prompt_v3`;
-- invoke the LLM only when supplier or customer is missing;
-- keep advisory mode;
-- keep auto-apply disabled;
-- keep OCR, dates, totals, tables, validation, and ERP readiness deterministic.
-
-## Current Benchmark Status
-
-Deterministic baseline:
+## Current Deterministic Benchmark Status
 
 - Invoice number: 100%
 - Invoice date: 100%
@@ -139,36 +124,7 @@ Deterministic baseline:
 - Exact row count: 52%
 - Within +/-1 rows: 68%
 
-Prompt calibration:
-
-- v1 valid JSON: 0%
-- v2 valid JSON: 0%
-- v3 valid JSON: 100%
-- v4 valid JSON: 100%
-- selected prompt: `hybrid_prompt_v3`
-
-Important limitation:
-
-Verified ground truth is incomplete, therefore hybrid accuracy improvement has not yet been proven. Hybrid reports intentionally block accuracy claims until complete human-verified labels exist.
-
 OCR confidence is not true accuracy. A high OCR confidence score only means the OCR engine was confident about recognized text, not that the extracted business field is correct.
-
-## Deployment Recommendation
-
-Only invoke the LLM in advisory mode when supplier or customer is missing.
-
-Keep deterministic:
-
-- OCR
-- invoice number
-- dates
-- totals
-- VAT
-- tables
-- validation
-- ERP readiness
-
-Do not enable global auto-apply, table auto-correction, or financial auto-correction in this release.
 
 ## Project Structure
 
@@ -176,14 +132,14 @@ Do not enable global auto-apply, table auto-correction, or financial auto-correc
 app/
   api/                 FastAPI routes
   core/                settings and response schemas
-  services/            OCR, layout, extraction, validation, ERP, hybrid advisory services
+  services/            OCR, layout, extraction, validation, ERP, review services
   static/              review UI assets
 dataset/
   demo/                demo documents
   images/              sample images
   labels/              sample labels
   manual_ground_truth_benchmark/
-docs/                  architecture, release, benchmark, setup, demo notes
+docs/                  architecture, benchmark, setup, demo notes
 scripts/               benchmark and analysis utilities
 tests/                 regression and integration tests
 run.py                 local application entry point
@@ -226,20 +182,7 @@ Corrections are validated through:
 POST /review/validate-corrections
 ```
 
-## Commands
-
-Environment check:
-
-```powershell
-cd D:\Stage_udgroup\invoice-ocr-erp
-.\.venv\Scripts\python.exe .\scripts\benchmark_hybrid_llm.py --check-env
-```
-
-Focused hybrid tests:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_hybrid_llm_benchmark.py -q
-```
+## Useful Commands
 
 Full tests:
 
@@ -271,28 +214,26 @@ Multi-dataset smoke benchmark:
 .\.venv\Scripts\python.exe .\scripts\benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
 ```
 
-Hybrid advisory benchmark:
+## Optional Research Archive
+
+The repository still contains an experimental local LLM advisory layer and related benchmark scripts. They are kept for research comparison, not production use.
+
+To enable it manually, set:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\benchmark_hybrid_llm.py --run-id hybrid_v3_advisory --mode advisory --max-documents 3 --prompt-versions hybrid_prompt_v3
+$env:INVOICE_OCR_ENABLE_LLM_RESOLVER="true"
 ```
 
-Hybrid report-only mode:
+Recommended production/demo setting:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\benchmark_hybrid_llm.py --run-id hybrid_prompt_compression_3doc_02 --mode advisory --max-documents 3 --prompt-versions hybrid_prompt_v1,hybrid_prompt_v2,hybrid_prompt_v3,hybrid_prompt_v4 --report-only
+$env:INVOICE_OCR_ENABLE_LLM_RESOLVER="false"
 ```
 
-Hybrid resume mode:
-
-```powershell
-.\.venv\Scripts\python.exe .\scripts\benchmark_hybrid_llm.py --run-id hybrid_v3_advisory --mode advisory --max-documents 10 --prompt-versions hybrid_prompt_v3 --resume
-```
+Do not use the advisory module to auto-apply ERP corrections. The deterministic gate and human review remain the source of truth.
 
 ## Documentation
 
-- [Hybrid LLM Architecture](docs/hybrid_llm_architecture.md)
-- [Release v1.1 Hybrid Advisory](docs/releases/v1.1-hybrid-advisory.md)
 - [Architecture Overview](docs/architecture_overview.md)
 - [Windows Setup](docs/setup_windows.md)
 - [Benchmark Summary](docs/benchmark_summary.md)
@@ -312,13 +253,12 @@ Hybrid resume mode:
 8. Show recalculated validation.
 9. Export ERP JSON only after the document is ready.
 10. Load a noisy document and show that unsafe export is blocked.
-11. Explain that the LLM is advisory only and cannot bypass the deterministic safety gate.
+11. Explain that the system is deterministic, auditable, and designed for ERP safety.
 
 ## Current Limitations
 
-- Hybrid accuracy improvement is not yet proven because verified labels are incomplete.
-- Local Ollama inference can be slow on CPU-only machines.
-- Stage-specific LLM latency is not fully instrumented in saved artifacts.
+- Some supplier/customer names still require human review on unusual layouts.
+- Table reconstruction can require review on heavily merged OCR rows or low-quality scans.
 - Correction memory is rule-based, not ML training.
 - Production deployment still needs authentication, reviewer roles, database-backed audit storage, and ERP-specific connectors.
 

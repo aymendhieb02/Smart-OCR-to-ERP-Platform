@@ -7,7 +7,7 @@ Target duration: 3 to 5 minutes.
 Run:
 
 ```powershell
-cd D:\Stage_mr_f\invoice-ocr-erp
+cd D:\Stage_udgroup\invoice-ocr-erp
 .\.venv\Scripts\Activate.ps1
 python run.py
 ```
