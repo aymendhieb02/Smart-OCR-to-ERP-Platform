@@ -841,6 +841,52 @@ def _invalid_table_row(row_lines: list[OCRVisualLine], reason: str) -> dict[str,
 
 
 
+NUMERIC_ROW_COLUMN_KEYS = ("quantity", "unit_price", "tax_rate", "discount", "line_total_ht", "total")
+
+
+def _numeric_columns_in_header_order(columns: dict[str, dict[str, Any]]) -> list[str]:
+    return [
+        key
+        for key, _column in sorted(
+            ((key, column) for key, column in columns.items() if key in NUMERIC_ROW_COLUMN_KEYS),
+            key=lambda item: item[1].get("center", item[1].get("x1", 0)),
+        )
+    ]
+
+
+def _drop_leading_row_number_if_present(text: str, parsed: list[float], expected_count: int) -> list[float]:
+    if len(parsed) != expected_count + 1:
+        return parsed
+    if re.match(r"^\s*0?\d{1,3}\b", text) and parsed[0].is_integer() and 0 <= parsed[0] <= 999:
+        return parsed[1:]
+    return parsed
+
+
+def _assign_text_fallback_numbers(values: dict[str, Any], parsed: list[float], columns: dict[str, dict[str, Any]]) -> bool:
+    numeric_columns = _numeric_columns_in_header_order(columns)
+    if numeric_columns:
+        numbers = _drop_leading_row_number_if_present(str(values.get("_raw_text", "")), parsed, len(numeric_columns))
+        mismatch = len(numbers) != len(numeric_columns)
+        if len(numbers) == 1 and "total" in numeric_columns:
+            values["total"] = numbers[-1]
+            return True
+        for key, value in zip(numeric_columns, numbers):
+            values[key] = value
+        return mismatch
+
+    if len(parsed) >= 3:
+        values["quantity"] = parsed[-3]
+        values["unit_price"] = parsed[-2]
+        values["total"] = parsed[-1]
+        return False
+    if len(parsed) == 2:
+        values["unit_price"] = parsed[-2]
+        values["total"] = parsed[-1]
+        return False
+    values["total"] = parsed[-1]
+    return True
+
+
 def _reconstruct_row_from_text(row_lines: list[OCRVisualLine], columns: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     text = " ".join(line.text for line in row_lines).strip()
     if _is_footer_text(text):
@@ -856,16 +902,9 @@ def _reconstruct_row_from_text(row_lines: list[OCRVisualLine], columns: dict[str
     description = re.sub(r"\s+", " ", description).strip()
     if len(description) < 3 or sum(char.isalpha() for char in description) < 3:
         return None
-    values: dict[str, Any] = {"description": description}
-    if len(parsed) >= 3:
-        values["quantity"] = parsed[-3]
-        values["unit_price"] = parsed[-2]
-        values["total"] = parsed[-1]
-    elif len(parsed) == 2:
-        values["unit_price"] = parsed[-2]
-        values["total"] = parsed[-1]
-    else:
-        values["total"] = parsed[-1]
+    values: dict[str, Any] = {"description": description, "_raw_text": text}
+    numeric_mismatch = _assign_text_fallback_numbers(values, parsed, columns)
+    values.pop("_raw_text", None)
     values["reference"] = _find_reference_text([block for line in row_lines for block in line.blocks])
     if values.get("reference") and description.lower().startswith(str(values["reference"]).lower()):
         description = description[len(str(values["reference"])):].strip(" -:|")
@@ -881,7 +920,7 @@ def _reconstruct_row_from_text(row_lines: list[OCRVisualLine], columns: dict[str
         "bbox": bbox,
         "cell_bboxes": {"description": bbox} if bbox else {},
         "source_ocr_nodes": [block.line_index for line in row_lines for block in line.blocks if block.line_index is not None],
-        "needs_review": values.get("quantity") is None or values.get("unit_price") is None,
+        "needs_review": numeric_mismatch or values.get("quantity") is None or values.get("total") is None,
         "confidence": round(sum(confidences) / len(confidences), 3) if confidences else None,
     }
 
