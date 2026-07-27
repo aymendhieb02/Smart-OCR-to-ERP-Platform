@@ -291,6 +291,7 @@ class ReviewCorrectionResponse(BaseModel):
     corrected_line_items: list[LineItem] = Field(default_factory=list)
     corrections: list[CorrectionItem] = Field(default_factory=list)
     validation: ValidationResult
+    validation_explanation: ValidationExplanation | None = None
     erp_json: dict[str, Any]
     validated_erp_json: dict[str, Any]
     invoice_validation_report: dict[str, Any] = Field(default_factory=dict)

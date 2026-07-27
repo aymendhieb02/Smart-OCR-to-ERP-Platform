@@ -1,130 +1,99 @@
-# Smart OCR-to-ERP Platform
+﻿# Smart OCR-to-ERP Platform
 
-Smart OCR-to-ERP Platform is a production-style FastAPI document intelligence system for extracting invoice data, validating it, reviewing uncertain values, and exporting ERP-ready JSON.
+Smart OCR-to-ERP Platform is a FastAPI document-intelligence application that reads invoice documents, extracts ERP fields, reconstructs line items, validates financial consistency, and gives reviewers a visual workspace before ERP export.
 
-The production workflow is deterministic by default. It uses OCR, layout understanding, candidate scoring, financial validation, and human review instead of relying on a generative model for ERP decisions.
+The production workflow is deterministic by default. It uses OCR, layout analysis, candidate scoring, table reconstruction, financial validation, and human review. The goal is not only to read text, but to decide whether the extracted business data is safe enough for ERP.
 
-## Project Overview
+## What This Project Does
 
-Most OCR demos stop at text recognition. This project goes further:
+- Reads PDFs, scanned PDFs, and image documents.
+- Preserves OCR text, confidence, bounding boxes, page size, and coordinate space.
+- Detects layout regions such as supplier, customer, metadata, products, totals, payment, taxes, footer, and notes.
+- Extracts invoice fields with deterministic candidate scoring.
+- Reconstructs product and service line items from OCR boxes.
+- Repairs inconsistent financial candidates when a clean totals triplet is available.
+- Validates HT/subtotal, VAT, TTC, tax rate, row totals, and ERP-required fields.
+- Blocks unsafe ERP export when values are missing, inconsistent, or low-confidence.
+- Provides a browser review UI with document preview overlays, editable fields, editable line items, automatic revalidation, and validated ERP JSON export.
+- Stores correction evidence for audit and future rule-based learning.
+- Includes benchmark and regression tooling for datasets and extraction quality.
 
-- reads PDFs, scanned PDFs, and image invoices;
-- preserves OCR text, confidence, bounding boxes, page size, and coordinate space;
-- builds layout regions and a document graph;
-- extracts invoice fields using deterministic candidate scoring;
-- reconstructs invoice tables and line items;
-- validates totals, VAT, row consistency, and required ERP fields;
-- blocks unsafe ERP export;
-- gives reviewers a visual UI with editable fields and line rows;
-- stores correction evidence;
-- provides deterministic benchmark tooling for datasets and regression testing.
-
-The operating principle is simple: automate what is reliable, review what is uncertain, and never push weak data silently into ERP.
+The operating rule is simple: automate reliable extraction, review uncertainty, and never export weak financial data silently.
 
 ## Main Pipeline
 
 ```mermaid
 flowchart TD
-    A["Invoice / delivery note / receipt"] --> B["File loading and preview generation"]
-    B --> C["OCR with bbox preservation"]
-    C --> D["Layout graph and semantic blocks"]
-    D --> E["Deterministic field extraction"]
+    A["Invoice / receipt / delivery note"] --> B["File loading and preview generation"]
+    B --> C["OCR with bounding boxes"]
+    C --> D["Layout regions and document graph"]
+    D --> E["Candidate-based field extraction"]
     E --> F["Table and line-item reconstruction"]
-    F --> G["Financial validation"]
+    F --> G["Financial reasoning and validation"]
     G --> H["ERP readiness gate"]
-    H --> I{"Safe for ERP export?"}
-    I -->|Yes| J["ERP JSON"]
-    I -->|No| K["Human review UI"]
-    K --> L["Corrections and validation refresh"]
-    L --> H
+    H --> I{"ERP export allowed?"}
+    I -->|Yes| J["Validated ERP JSON"]
+    I -->|No| K["Human review workspace"]
+    K --> L["Reviewer edits fields or rows"]
+    L --> M["Automatic revalidation"]
+    M --> H
 ```
 
 ## Why The Main System Is Deterministic
 
-ERP extraction needs traceability more than creative reasoning. The production pipeline avoids generative correction in the normal request path because deterministic extraction is:
+ERP extraction needs traceability. The normal request path avoids automatic generative correction because deterministic extraction is:
 
-- faster and cheaper;
-- easier to benchmark;
-- easier to explain to a jury or auditor;
-- safer for financial totals and VAT;
-- independent of local model availability;
-- fully tied to OCR/layout evidence and validation rules.
+- easier to audit;
+- faster and cheaper to run;
+- testable with regression fixtures;
+- safer for totals, VAT, and row-level arithmetic;
+- independent of local LLM availability;
+- tied to OCR evidence, layout geometry, and validation rules.
 
-An experimental local LLM advisory module remains in the repository for research only. It is disabled by default, not part of the normal UI/demo flow, and cannot bypass deterministic validation.
+Experimental advisory LLM files may exist in the repository for research comparison, but the default production/demo path does not rely on them and cannot bypass ERP validation.
 
 ## Core Capabilities
 
-### OCR And Layout
+### OCR And Visual Evidence
 
-- PaddleOCR primary OCR engine.
+- PaddleOCR primary engine.
 - Tesseract-compatible fallback paths when configured.
-- OCR cache safety with bbox-aware cache validation.
-- PDF/image preview generation.
-- OCR boxes, layout blocks, field boxes, and row overlays.
-- Logical block detection for supplier, customer, metadata, products, totals, payment, taxes, footer, notes, and unknown areas.
+- Bbox-aware OCR cache validation.
+- PDF and image preview generation.
+- Visual overlays for OCR boxes, layout blocks, field boxes, and line rows.
+- Clickable regions with evidence, confidence, page, and source details.
 
-### Deterministic Extraction
+### Field Extraction
 
-The deterministic engine extracts and normalizes:
+The deterministic engine extracts supplier and customer data, invoice metadata, currency, HT/subtotal, VAT/tax amount, TTC/grand total, tax rate, bank details, line items, validation status, and ERP readiness.
 
-- supplier name;
-- customer name;
-- supplier tax ID;
-- invoice number;
-- invoice date;
-- due date;
-- purchase/order reference;
-- currency;
-- amount excluding tax;
-- VAT/tax amount;
-- total amount;
-- tax rate;
-- payment data;
-- line items;
-- validation status;
-- ERP readiness.
-
-Rich fields can include value, confidence, bbox, page, line index, and extraction source.
+Each rich field can include value, confidence, bbox, page, line index, source, and candidate evidence.
 
 ### Table And Line-Item Recovery
 
-- Header detection with English/French aliases.
-- Column inference from x-position.
-- Row reconstruction from OCR boxes.
+- Header detection with English and French aliases.
+- Column inference from OCR x-positions.
 - Wrapped description handling.
-- Row/cell evidence.
-- Product rows separated from totals, shipping, footers, and bank/payment areas.
-- Uncertain fallback rows marked for review.
+- Quantity, unit, unit price, discount, tax rate, HT, VAT, and TTC support.
+- Product rows separated from totals, payment, footer, and bank text.
+- Human-edited rows become verified when their values are complete and mathematically valid.
+
+### Financial Validation
+
+The system validates:
+
+- `HT + VAT = TTC`;
+- tax-rate plausibility;
+- row arithmetic;
+- line total sum vs subtotal;
+- negative totals on non-credit invoices;
+- missing ERP-required fields.
+
+When selected totals are inconsistent, the extractor can recover a stronger candidate triplet from the totals block.
 
 ### Review UI
 
-The browser review workspace supports:
-
-- document upload;
-- camera capture;
-- document preview;
-- overlay toggles;
-- clickable OCR/layout/field/row regions;
-- editable extracted fields;
-- editable/addable/deletable line items;
-- correction saving;
-- validation refresh;
-- ERP JSON inspection.
-
-![Review UI](docs/screenshots/landing_upload.png)
-
-## Current Deterministic Benchmark Status
-
-- Invoice number: 100%
-- Invoice date: 100%
-- Supplier canonical: 70%
-- Customer canonical: 100%
-- Amount TTC: 76.92%
-- Line-item presence: 60%
-- Exact row count: 52%
-- Within +/-1 rows: 68%
-
-OCR confidence is not true accuracy. A high OCR confidence score only means the OCR engine was confident about recognized text, not that the extracted business field is correct.
+The review workspace supports upload or camera capture, demo documents, visual overlays, editable ERP fields, editable line items, automatic revalidation after edits, manual `Save & recheck` / `Save table & recheck`, financial checks, diagnostics, and validated ERP JSON export.
 
 ## Project Structure
 
@@ -133,7 +102,7 @@ app/
   api/                 FastAPI routes
   core/                settings and response schemas
   services/            OCR, layout, extraction, validation, ERP, review services
-  static/              review UI assets
+  static/              browser review UI
 dataset/
   demo/                demo documents
   images/              sample images
@@ -157,13 +126,13 @@ python -m pip install -r requirements.txt
 python run.py
 ```
 
-Open:
+Open the UI:
 
 ```text
 http://127.0.0.1:8000/
 ```
 
-Swagger/OpenAPI:
+Open Swagger/OpenAPI:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -176,7 +145,7 @@ curl.exe -X POST "http://127.0.0.1:8000/process-invoice" -F "file=@invoice.png"
 curl.exe "http://127.0.0.1:8000/demo-documents"
 ```
 
-Corrections are validated through:
+Review corrections are validated through:
 
 ```text
 POST /review/validate-corrections
@@ -184,7 +153,7 @@ POST /review/validate-corrections
 
 ## Useful Commands
 
-Full tests:
+Run tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -196,72 +165,51 @@ Compile check:
 .\.venv\Scripts\python.exe -m compileall app scripts tests
 ```
 
-Deterministic smoke benchmark:
+Run the app:
+
+```powershell
+python run.py
+```
+
+Smoke benchmark:
 
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\evaluate_dataset.py --mode smoke
 ```
 
-Deterministic benchmark with resume:
-
-```powershell
-.\.venv\Scripts\python.exe .\scripts\evaluate_dataset.py --mode full --resume
-```
-
 Multi-dataset smoke benchmark:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
+.\.venv\Scripts\python.exe .\scriptsenchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
 ```
-
-## Optional Research Archive
-
-The repository still contains an experimental local LLM advisory layer and related benchmark scripts. They are kept for research comparison, not production use.
-
-To enable it manually, set:
-
-```powershell
-$env:INVOICE_OCR_ENABLE_LLM_RESOLVER="true"
-```
-
-Recommended production/demo setting:
-
-```powershell
-$env:INVOICE_OCR_ENABLE_LLM_RESOLVER="false"
-```
-
-Do not use the advisory module to auto-apply ERP corrections. The deterministic gate and human review remain the source of truth.
-
-## Documentation
-
-- [Architecture Overview](docs/architecture_overview.md)
-- [Windows Setup](docs/setup_windows.md)
-- [Benchmark Summary](docs/benchmark_summary.md)
-- [Confidence Model](docs/confidence_model.md)
-- [Final Demo Walkthrough](docs/final_demo_walkthrough.md)
-- [Known Limitations](docs/limitations.md)
 
 ## Recommended Demo Flow
 
-1. Start the app.
+1. Start the app with `python run.py`.
 2. Open the review UI.
 3. Load a clean demo invoice.
-4. Show OCR boxes and layout blocks.
-5. Click extracted fields and show evidence.
-6. Edit a line item.
-7. Save corrections.
-8. Show recalculated validation.
-9. Export ERP JSON only after the document is ready.
+4. Show OCR boxes, layout blocks, field boxes, and line rows.
+5. Click a field or row to show visual evidence.
+6. Edit a line item or field.
+7. Show automatic revalidation and the refreshed ERP readiness status.
+8. Use `Save & recheck` or `Save table & recheck`.
+9. Export validated ERP JSON only when ERP readiness is clear.
 10. Load a noisy document and show that unsafe export is blocked.
-11. Explain that the system is deterministic, auditable, and designed for ERP safety.
+
+## Confidence And Accuracy
+
+OCR confidence is not true accuracy. OCR confidence is not true business accuracy. OCR confidence measures recognized text certainty. Extraction confidence measures candidate quality. ERP readiness depends on required fields, financial consistency, row validation, and review status.
+
+True accuracy claims require manually verified ground-truth labels.
 
 ## Current Limitations
 
-- Some supplier/customer names still require human review on unusual layouts.
-- Table reconstruction can require review on heavily merged OCR rows or low-quality scans.
+- Some unusual supplier/customer layouts still need human review.
+- Table reconstruction can require review on heavily merged rows or low-quality scans.
 - Correction memory is rule-based, not ML training.
 - Production deployment still needs authentication, reviewer roles, database-backed audit storage, and ERP-specific connectors.
 
 ## License
 
 Add the license that matches your intended usage before distributing this project commercially.
+

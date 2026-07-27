@@ -29,6 +29,10 @@ let cameraStream = null;
 let selectedRegionPayload = null;
 let originalLineItemsSnapshot = [];
 let renderStatus = {};
+let autoValidationTimer = null;
+let autoValidationInFlight = false;
+let autoValidationQueued = false;
+const AUTO_VALIDATION_DELAY_MS = 800;
 
 const EDITABLE_FIELDS = [
   "supplier_name",
@@ -160,7 +164,7 @@ async function processUploadedFile() {
 
   const formData = new FormData();
   formData.append("file", selectedFile);
-  setLoading(true, "Running OCR, layout analysis, candidate extraction, and validation...");
+  setLoading(true, "Reading document, detecting layout, extracting fields, and validating ERP readiness...");
   hideError();
   results.classList.add("hidden");
 
@@ -171,7 +175,7 @@ async function processUploadedFile() {
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.detail || "Processing failed.");
+      throw new Error(data.detail || "Document processing failed.");
     }
     renderResults(data);
   } catch (error) {
@@ -183,7 +187,7 @@ async function processUploadedFile() {
 
 async function processDemoDocument(demoId, label) {
   if (!demoId) return;
-  setLoading(true, `Loading demo: ${label || demoId}. Running the normal OCR pipeline...`);
+  setLoading(true, `Loading demo: ${label || demoId}. Running the normal extraction pipeline...`);
   hideError();
   results.classList.add("hidden");
   fileName.textContent = `${label || demoId} (demo document)`;
@@ -559,8 +563,8 @@ function renderNotes(data) {
 
 function renderValidationSummary(explanation, validation) {
   const status = explanation?.status || validation?.status || "-";
-  const reason = explanation?.reason || "No validation explanation returned.";
-  const action = explanation?.suggested_action || "Review low-confidence or missing fields before ERP export.";
+  const reason = explanation?.reason || "No validation summary returned.";
+  const action = explanation?.suggested_action || "Review missing, low-confidence, or inconsistent fields before ERP export.";
   const statusText = statusExplanation(status);
   validationSummary.innerHTML = `
     <span class="label">Validation explanation</span>
@@ -587,9 +591,9 @@ function statusLabel(status) {
 function statusExplanation(status) {
   const normalized = String(status || "").toLowerCase();
   if (normalized.includes("valid") && !normalized.includes("invalid")) return "Required values are present and the available business checks passed.";
-  if (normalized.includes("review")) return "Some values are missing, uncertain, or need human confirmation before ERP export.";
-  if (normalized.includes("invalid") || normalized.includes("reject")) return "A blocking extraction or business-rule issue prevents ERP insertion.";
-  if (normalized.includes("manual")) return "A reviewer changed this value; save corrections to re-run validation.";
+  if (normalized.includes("review")) return "Some values are missing, uncertain, or need reviewer confirmation before ERP export.";
+  if (normalized.includes("invalid") || normalized.includes("reject")) return "A blocking extraction or business-rule issue prevents ERP export.";
+  if (normalized.includes("manual")) return "A reviewer changed this value; validation refreshes automatically and can be saved manually.";
   if (normalized.includes("low")) return "The value was detected with weak OCR or layout evidence.";
   if (normalized.includes("missing")) return "The value is required but was not found confidently.";
   if (normalized.includes("conflict")) return "Two or more detected values disagree and need review.";
@@ -607,10 +611,10 @@ function renderErpReadiness(data) {
   const disabledReasons = [...blockers, ...missing.map((field) => `${field} is missing`)];
   const className = status === "ERP Ready" ? "ready" : status === "Rejected" ? "rejected" : "review";
   const nextAction = readiness.ready
-    ? "Next action: export the validated ERP JSON or keep reviewing the evidence."
+    ? "Next action: export the validated ERP JSON or continue reviewing evidence."
     : disabledReasons.length
       ? `Next action: fix ${disabledReasons[0]}${disabledReasons.length > 1 ? ` and ${disabledReasons.length - 1} more issue(s)` : ""}, then save corrections.`
-      : "Next action: review low-confidence fields, product rows, and financial checks before export.";
+      : "Next action: review low-confidence fields, line items, and financial checks before export.";
   panel.className = `inspector-card readiness-card ${className}`;
   panel.innerHTML = `
     <span class="label">ERP readiness</span>
@@ -626,7 +630,7 @@ function renderErpReadiness(data) {
   `;
   panel.querySelector("#erpExportBtn")?.addEventListener("click", () => {
     navigator.clipboard?.writeText(pretty(data.validated_erp_json || data.erp_json || {}));
-    showTransientNote("ERP JSON copied for export.");
+    showTransientNote("Validated ERP JSON copied.");
   });
 }
 
@@ -635,7 +639,7 @@ function renderConfidences(confidences) {
   list.innerHTML = "";
   const entries = Object.entries(confidences);
   if (!entries.length) {
-    list.innerHTML = '<span class="chip">No field confidence data</span>';
+    list.innerHTML = '<span class="chip">No field confidence data returned</span>';
     return;
   }
   entries
@@ -658,9 +662,10 @@ function renderLineItems(items, rowValidation = []) {
   const rows = editableItems.map((item, index) => editableLineItemRow(item, index, rowValidation[index])).join("");
   box.innerHTML = `
     <div class="panel-head">
-      <p class="panel-subtitle">Edit extracted product lines before using the ERP JSON.</p>
+      <p class="panel-subtitle">Review or correct extracted line items. Validation refreshes automatically after edits.</p>
       <div class="edit-actions">
         <button class="ghost small" id="addLineItemBtn" type="button">Add line</button>
+        <button class="ghost small" id="saveLineItemsBtn" type="button">Save table & recheck</button>
       </div>
     </div>
     <table>
@@ -670,10 +675,11 @@ function renderLineItems(items, rowValidation = []) {
           <th>Total HT</th><th>Tax %</th><th>Total TTC</th><th>Status</th><th>Actions</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="9"><div class="note">No line items parsed. Add one manually if needed.</div></td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="9"><div class="note">No line items were extracted. Add a row manually if needed.</div></td></tr>'}</tbody>
     </table>
   `;
   box.querySelector("#addLineItemBtn")?.addEventListener("click", () => addReviewLineItem());
+  box.querySelector("#saveLineItemsBtn")?.addEventListener("click", () => saveCorrections());
   box.querySelectorAll("[data-line-field]").forEach((input) => {
     input.addEventListener("input", () => updateReviewLineItem(Number(input.dataset.index), input.dataset.lineField, input.value));
   });
@@ -705,6 +711,10 @@ function resetCorrections() {
   correctedFields = {};
   correctedLineItems = [];
   ignoredRows = [];
+  clearTimeout(autoValidationTimer);
+  autoValidationTimer = null;
+  autoValidationInFlight = false;
+  autoValidationQueued = false;
 }
 
 function updateReviewField(field, rawValue) {
@@ -724,6 +734,7 @@ function updateReviewField(field, rawValue) {
   syncDynamicFieldRows(field, value);
   updateCorrectionLayer("detected_fields");
   updateJsonPanels();
+  scheduleAutoValidation("field_edit");
 }
 
 function getFieldOriginalValue(field) {
@@ -784,10 +795,13 @@ function updateReviewLineItem(index, field, rawValue) {
   const value = coerceValue(field, rawValue);
   items[index][field] = value;
   if (field === "line_total_ttc") items[index].total = value;
+  items[index].source = "human verified";
+  items[index].confidence = 1;
   syncLineItemsToResponse();
   correctedLineItems.push({ row_index: index, field, corrected_value: value, corrected_by: "human" });
   updateCorrectionLayer("line_items");
   updateJsonPanels();
+  scheduleAutoValidation("line_item_edit");
 }
 
 function addReviewLineItem() {
@@ -810,6 +824,7 @@ function addReviewLineItem() {
   renderDynamicReview();
   updateCorrectionLayer("line_items");
   updateJsonPanels();
+  scheduleAutoValidation("line_item_added");
 }
 
 function deleteReviewLineItem(index) {
@@ -822,12 +837,13 @@ function deleteReviewLineItem(index) {
   renderDynamicReview();
   updateCorrectionLayer("line_items");
   updateJsonPanels();
+  scheduleAutoValidation("line_item_deleted");
 }
 
 function restoreReviewLineItem(index) {
   const original = originalLineItemsSnapshot[index];
   if (!original) {
-    showTransientNote("No original row is available for restore.");
+    showTransientNote("No original row is available to restore.");
     return;
   }
   const items = ensureLineItems();
@@ -838,6 +854,7 @@ function restoreReviewLineItem(index) {
   renderDynamicReview();
   updateCorrectionLayer("line_items");
   updateJsonPanels();
+  scheduleAutoValidation("line_item_restored");
   showTransientNote(`Restored line ${index + 1} to the original extraction.`);
 }
 
@@ -988,7 +1005,7 @@ function renderFinancialChecks(host) {
   }).join("");
   host.innerHTML = `
     <div class="business-list">
-      ${rows || '<div class="note warning-note">No complete financial checks could be run yet.</div>'}
+      ${rows || '<div class="note warning-note">Financial checks need more complete totals before they can run.</div>'}
       ${errors.map((message) => `<div class="note error-note">${escapeHtml(message)}</div>`).join("")}
       ${warnings.map((message) => `<div class="note warning-note">${escapeHtml(message)}</div>`).join("")}
     </div>
@@ -1005,7 +1022,7 @@ function renderCorrectionSuggestions(host) {
     <div class="candidate-list">
       ${assistantIssues.length ? `
         <article class="candidate-card">
-          <header><strong>AI Review Assistant</strong><span>${formatConfidence(assistant.confidence)}</span></header>
+          <header><strong>Review Assistant</strong><span>${formatConfidence(assistant.confidence)}</span></header>
           <div>${escapeHtml(assistant.summary || "Review assistant generated guidance.")}</div>
           <div>ERP impact: ${escapeHtml(assistant.erp_impact || "-")}</div>
           <div class="note">${escapeHtml(assistant.reviewer_control || "Suggestions are advisory only.")}</div>
@@ -1026,7 +1043,7 @@ function renderCorrectionSuggestions(host) {
             `).join("")}</div>` : ""}
           </article>
         `).join("")}
-      ` : '<div class="note success-note">AI Review Assistant found no extra review issues.</div>'}
+      ` : '<div class="note success-note">Review Assistant found no extra review issues.</div>'}
       ${suggestions.length ? suggestions.map((suggestion, index) => `
         <article class="candidate-card">
           <header><strong>${escapeHtml(suggestion.field || "Suggestion")}</strong><span>${formatConfidence(suggestion.confidence)}</span></header>
@@ -1038,7 +1055,7 @@ function renderCorrectionSuggestions(host) {
             <button class="ghost small" type="button" data-reject-suggestion="${index}">Reject</button>
           </div>
         </article>
-      `).join("") : '<div class="note success-note">No automatic correction suggestions.</div>'}
+      `).join("") : '<div class="note success-note">No correction suggestions returned.</div>'}
       ${candidateCards.length ? `<h2>Field candidates</h2>${candidateCards.map(({ field, candidate }, index) => `
         <article class="candidate-card">
           <header><strong>${escapeHtml(field)}</strong><span>${formatConfidence(candidate.confidence ?? candidate.score)}</span></header>
@@ -1078,7 +1095,7 @@ function renderDuplicateAndFraud(host) {
       </article>
       <article class="business-item ${indicators.length ? "warn" : "pass"}">
         <strong>Automated risk indicators</strong>
-        ${indicators.length ? indicators.map((item) => `<div class="note warning-note">${escapeHtml(item)}</div>`).join("") : '<div class="note success-note">No risk indicators returned.</div>'}
+        ${indicators.length ? indicators.map((item) => `<div class="note warning-note">${escapeHtml(item)}</div>`).join("") : '<div class="note success-note">No duplicate or risk indicators returned.</div>'}
         <div class="note">${escapeHtml(fraud.disclaimer || "These are automated risk indicators, not a fraud determination.")}</div>
       </article>
     </div>
@@ -1115,7 +1132,7 @@ function renderDynamicKeyValueRows(table, rows) {
   const wrapper = document.createElement("div");
   wrapper.className = "dynamic-key-values";
   if (!rows.length) {
-    wrapper.innerHTML = '<div class="note">No rows in this table for the current filter.</div>';
+    wrapper.innerHTML = '<div class="note">No rows match the current filter.</div>';
     return wrapper;
   }
   rows.forEach((row) => {
@@ -1145,7 +1162,7 @@ function renderDynamicGridTable(table, rows) {
   const wrapper = document.createElement("div");
   wrapper.className = "dynamic-table-scroll";
   if (!rows.length) {
-    wrapper.innerHTML = '<div class="note">No rows in this table for the current filter.</div>';
+    wrapper.innerHTML = '<div class="note">No rows match the current filter.</div>';
     return wrapper;
   }
   const columns = table.columns || [];
@@ -1179,6 +1196,9 @@ function renderDynamicGridTable(table, rows) {
       ignoredRows.push(row.key, lineIndexFromKey(row.key));
       correctedLineItems.push({ row_key: row.key, status: "ignored" });
       renderDynamicReview();
+      updateCorrectionLayer(table.id);
+      updateJsonPanels();
+      scheduleAutoValidation("dynamic_row_ignored");
     });
     tr?.querySelector("[data-restore-row]")?.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1192,6 +1212,9 @@ function renderDynamicGridTable(table, rows) {
       const tableData = (lastResponse.dynamic_tables || []).find((item) => item.id === table.id);
       if (tableData) tableData.rows = tableData.rows.filter((item) => item.key !== row.key);
       renderDynamicReview();
+      updateCorrectionLayer(table.id);
+      updateJsonPanels();
+      scheduleAutoValidation("dynamic_row_deleted");
     });
     tr?.addEventListener("click", (event) => {
       if (event.target?.isContentEditable || event.target?.tagName === "BUTTON") return;
@@ -1234,6 +1257,7 @@ function markCorrected(row, correctedValue, tableId, element) {
   element.querySelector(".status-chip").className = "status-chip manually_corrected";
   updateCorrectionLayer(tableId);
   updateJsonPanels();
+  scheduleAutoValidation("dynamic_field_edit");
 }
 
 function markTableCellCorrected(row, column, correctedValue, tableId, element) {
@@ -1256,6 +1280,7 @@ function markTableCellCorrected(row, column, correctedValue, tableId, element) {
   element.classList.add("manually_corrected");
   updateCorrectionLayer(tableId);
   updateJsonPanels();
+  scheduleAutoValidation("dynamic_cell_edit");
 }
 
 function addDynamicLineItem(table) {
@@ -1311,6 +1336,8 @@ function addDynamicLineItem(table) {
   renderLineItems(items);
   renderDynamicReview();
   updateJsonPanels();
+  updateCorrectionLayer(table.id);
+  scheduleAutoValidation("dynamic_line_item_added");
 }
 
 function updateCorrectionLayer(tableId) {
@@ -1514,7 +1541,7 @@ function renderOverlayDiagnostics(stage, page, renderedWidth, renderedHeight, co
   const totalBackend = lastResponse?.overlay_counts || {};
   const messages = [];
   if (document.getElementById("toggleOcr").checked && totalBackend.ocr_blocks && counts.ocr === 0) {
-    messages.push("OCR boxes unavailable: backend returned no valid page coordinates.");
+    messages.push("OCR boxes are unavailable because the backend returned no valid page coordinates.");
   }
   if (document.getElementById("toggleLayout").checked && totalBackend.layout_blocks && counts.layout === 0) {
     messages.push("Layout blocks unavailable: backend returned no valid page coordinates.");
@@ -1522,8 +1549,8 @@ function renderOverlayDiagnostics(stage, page, renderedWidth, renderedHeight, co
   panel.innerHTML = `
     <strong>Overlay diagnostics</strong>
     <div>Page: ${escapeHtml(page.page)}</div>
-    <div>Preview natural size: ${escapeHtml(page.width)} x ${escapeHtml(page.height)}</div>
-    <div>Preview rendered size: ${Math.round(renderedWidth)} x ${Math.round(renderedHeight)}</div>
+    <div>Original page size: ${escapeHtml(page.width)} x ${escapeHtml(page.height)}</div>
+    <div>Displayed page size: ${Math.round(renderedWidth)} x ${Math.round(renderedHeight)}</div>
     <div>OCR boxes: ${totalBackend.ocr_blocks || 0} total / ${counts.ocr} visible</div>
     <div>Layout blocks: ${totalBackend.layout_blocks || 0} total / ${counts.layout} visible</div>
     <div>Field boxes: ${totalBackend.field_boxes || 0} total / ${counts.field} visible</div>
@@ -1531,7 +1558,7 @@ function renderOverlayDiagnostics(stage, page, renderedWidth, renderedHeight, co
     <div>Invalid boxes: ${counts.invalid}</div>
     <div>Rejected at normalization: ${(totalBackend.rejected_boxes || []).length}</div>
     <div>First invalid reason: ${escapeHtml(totalBackend.first_invalid_reason || "-")}</div>
-    <div>Current zoom: ${Math.round(previewZoom * 100)}%</div>
+    <div>Zoom: ${Math.round(previewZoom * 100)}%</div>
     <div>Selected region: ${escapeHtml(selectedRegionPayload?.label || "-")}</div>
     ${messages.map((message) => `<div class="note warning-note">${escapeHtml(message)}</div>`).join("")}
   `;
@@ -1578,11 +1605,11 @@ function extractionReasons(type, payload) {
   if (normalizedType.includes("layout")) items.push("Selected from a semantic layout block.");
   if (normalizedType.includes("field")) items.push("Linked to an extracted ERP field candidate.");
   if (normalizedType.includes("row")) items.push("Linked to a reconstructed product row.");
-  if (normalizedType.includes("ocr")) items.push("Raw OCR box; use it as evidence before assigning a field.");
+  if (normalizedType.includes("ocr")) items.push("Raw OCR evidence; use it before assigning or correcting a field.");
   if (payload?.source) items.push(`Source: ${payload.source}.`);
-  if (payload?.bbox) items.push("Has page coordinates, so the value can be visually verified.");
-  if (payload?.confidence !== undefined && Number(payload.confidence) >= 0.85) items.push("High confidence candidate.");
-  if (payload?.confidence !== undefined && Number(payload.confidence) < 0.7) items.push("Low confidence candidate; review before export.");
+  if (payload?.bbox) items.push("Has page coordinates and can be visually verified.");
+  if (payload?.confidence !== undefined && Number(payload.confidence) >= 0.85) items.push("High-confidence candidate.");
+  if (payload?.confidence !== undefined && Number(payload.confidence) < 0.7) items.push("Low-confidence candidate; review before export.");
   if (payload?.rejection_reason) items.push(`Rejected reason: ${payload.rejection_reason}.`);
   if (!items.length) items.push("No detailed scoring evidence was returned for this region.");
   return {
@@ -1592,13 +1619,8 @@ function extractionReasons(type, payload) {
 }
 
 
-async function saveCorrections() {
-  if (!lastResponse) {
-    showError("Process a document before saving corrections.");
-    return;
-  }
-  setLoading(true, "Saving corrections, recomputing totals, and checking ERP readiness...");
-  const payload = {
+function buildReviewCorrectionPayload() {
+  return {
     document_id: lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
     source_file: lastResponse.erp_json?.metadata?.source_file || null,
     detected_fields: lastResponse.detected_fields || {},
@@ -1607,35 +1629,99 @@ async function saveCorrections() {
     ignored_rows: ignoredRows,
     original_payload: lastResponse,
   };
+}
+
+function refreshValidationHeader() {
+  const validation = lastResponse?.validation || {};
+  const explanation = lastResponse?.validation_explanation;
+  const status = explanation?.status || validation.status || (validation.is_valid ? "valid" : "invalid");
+  const statusEl = document.getElementById("validationStatus");
+  if (statusEl) {
+    statusEl.textContent = statusLabel(status);
+    statusEl.title = statusExplanation(status);
+    statusEl.className = `pill ${status}`;
+  }
+  const readiness = lastResponse?.erp_readiness || lastResponse?.erp_json?.quality?.erp_readiness || {};
+  const erpDecision = document.getElementById("erpDecision");
+  if (erpDecision) erpDecision.textContent = readiness.erp_ready_status || (status === "valid" ? "ERP Ready" : "Needs Review");
+}
+
+function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
+  lastResponse.corrected_response = data;
+  lastResponse.validated_erp_json = data.validated_erp_json || lastResponse.validated_erp_json;
+  lastResponse.erp_json = data.erp_json || data.validated_erp_json || lastResponse.erp_json;
+  lastResponse.detected_fields = data.corrected_fields || lastResponse.detected_fields;
+  lastResponse.all_line_items = normalizeLineItems(lastResponse.detected_fields?.line_items || data.corrected_line_items || []);
+  lastResponse.row_validation = data.row_validation || lastResponse.row_validation;
+  lastResponse.financial_reasoning = data.financial_reasoning || lastResponse.financial_reasoning;
+  lastResponse.confidence_breakdown = data.confidence_breakdown || lastResponse.confidence_breakdown;
+  lastResponse.erp_readiness = data.erp_readiness || lastResponse.erp_readiness;
+  lastResponse.invoice_validation_report = data.invoice_validation_report || lastResponse.invoice_validation_report;
+  lastResponse.validation = data.validation || lastResponse.validation;
+  lastResponse.validation_explanation = data.validation_explanation || data.erp_json?.quality?.validation_explanation || lastResponse.validation_explanation;
+  refreshValidationHeader();
+  renderErpReadiness(lastResponse);
+  renderNotes(lastResponse);
+  renderValidationSummary(lastResponse.validation_explanation, lastResponse.validation);
+  if (rerenderEditableRows) renderLineItems(lastResponse.detected_fields?.line_items || [], lastResponse.row_validation || []);
+  renderDynamicReview();
+  updateJsonPanels();
+}
+
+function scheduleAutoValidation(reason = "edit") {
+  if (!lastResponse) return;
+  clearTimeout(autoValidationTimer);
+  const statusEl = document.getElementById("validationStatus");
+  if (statusEl) {
+    statusEl.textContent = "Rechecking...";
+    statusEl.title = "Automatic validation is queued for the latest edit.";
+    statusEl.className = "pill needs_review";
+  }
+  autoValidationTimer = setTimeout(() => validateCorrections({ automatic: true, reason }), AUTO_VALIDATION_DELAY_MS);
+}
+
+async function validateCorrections({ automatic = false, reason = "manual" } = {}) {
+  if (!lastResponse) {
+    if (!automatic) showError("Process a document before saving review changes.");
+    return;
+  }
+  if (automatic && autoValidationInFlight) {
+    autoValidationQueued = true;
+    return;
+  }
+  autoValidationInFlight = true;
+  if (!automatic) setLoading(true, "Saving review changes and refreshing ERP validation...");
   try {
     const response = await fetch("/review/validate-corrections", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(buildReviewCorrectionPayload()),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Could not save corrections.");
-    lastResponse.corrected_response = data;
-    lastResponse.validated_erp_json = data.validated_erp_json;
-    lastResponse.erp_json = data.erp_json || data.validated_erp_json;
-    lastResponse.detected_fields = data.corrected_fields || lastResponse.detected_fields;
-    lastResponse.row_validation = data.row_validation || lastResponse.row_validation;
-    lastResponse.financial_reasoning = data.financial_reasoning || lastResponse.financial_reasoning;
-    lastResponse.confidence_breakdown = data.confidence_breakdown || lastResponse.confidence_breakdown;
-    lastResponse.erp_readiness = data.erp_readiness || lastResponse.erp_readiness;
-    lastResponse.invoice_validation_report = data.invoice_validation_report || lastResponse.invoice_validation_report;
-    lastResponse.validation = data.validation || lastResponse.validation;
-    renderErpReadiness(lastResponse);
-    renderNotes(lastResponse);
-    renderLineItems(lastResponse.detected_fields?.line_items || [], lastResponse.row_validation || []);
-    renderDynamicReview();
-    updateJsonPanels();
-    showTransientNote(`Revalidated ${data.corrections?.length || 0} correction(s). ERP status: ${data.erp_readiness?.erp_ready_status || data.validation.status}`);
+    if (!response.ok) throw new Error(data.detail || "Could not revalidate the corrected document.");
+    applyCorrectionValidationResponse(data, { rerenderEditableRows: true });
+    if (!automatic) {
+      showTransientNote(`Saved ${data.corrections?.length || 0} review change(s). ERP status: ${data.erp_readiness?.erp_ready_status || data.validation?.status}`);
+    }
   } catch (error) {
-    showError(error.message);
+    if (automatic) {
+      console.warn(`Automatic validation failed after ${reason}:`, error);
+      refreshValidationHeader();
+    } else {
+      showError(error.message);
+    }
   } finally {
-    setLoading(false);
+    autoValidationInFlight = false;
+    if (!automatic) setLoading(false);
+    if (autoValidationQueued) {
+      autoValidationQueued = false;
+      scheduleAutoValidation("queued_edit");
+    }
   }
+}
+
+async function saveCorrections() {
+  await validateCorrections({ automatic: false, reason: "save" });
 }
 
 function buildCorrectedFieldPayload() {
@@ -1703,6 +1789,7 @@ function rejectSelectedRegion() {
     user_action: "rejected",
   };
   updateCorrectionLayer("visual_region");
+  scheduleAutoValidation("candidate_rejected");
   showTransientNote(`Rejected candidate for ${field}.`);
 }
 

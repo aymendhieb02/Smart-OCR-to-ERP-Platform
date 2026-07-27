@@ -27,6 +27,7 @@ from app.services.financial_reasoner import reason_financials
 from app.services.fraud_indicators import detect_fraud_indicators
 from app.services.invoice_validation_report import build_invoice_validation_report
 from app.services.row_validation_engine import summarize_rows, validate_rows
+from app.services.validation_explainer import build_validation_explanation
 from app.services.validator import validate_invoice
 
 CORRECTION_DIR = settings.output_dir / "corrections"
@@ -107,7 +108,8 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         ))
 
     if payload.line_item_corrections:
-        fields.line_items = _review_line_items(payload.line_item_corrections, payload.ignored_rows)
+        reviewed_rows = _reviewed_line_item_keys(payload)
+        fields.line_items = _review_line_items(payload.line_item_corrections, payload.ignored_rows, reviewed_rows)
         _recompute_amounts_from_line_items(fields)
         for index, item in enumerate(fields.line_items):
             records.append(CorrectionItem(
@@ -175,6 +177,7 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
     duplicate = detect_duplicates(fields)
     fraud = detect_fraud_indicators(fields, financial=financial, duplicate=duplicate, validation={"missing_fields": readiness["missing_fields"]})
     suggestions = suggest_corrections(fields)
+    validation_explanation = build_validation_explanation(validation)
     report = build_invoice_validation_report(
         fields=fields,
         rows=row_validation,
@@ -202,6 +205,7 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         "confidence_breakdown": confidence,
         "erp_readiness": readiness,
         "financial_reasoning": financial,
+        "validation_explanation": validation_explanation.model_dump(mode="json"),
         "fraud_indicators": fraud,
         "correction_metadata": {
             "corrected_by": "human",
@@ -223,6 +227,7 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         corrected_line_items=fields.line_items,
         corrections=records,
         validation=validation,
+        validation_explanation=validation_explanation,
         erp_json=erp_json.model_dump(mode="json"),
         validated_erp_json=validated_erp_json,
         invoice_validation_report=report,
@@ -332,14 +337,37 @@ def _normalize_field_correction(
     return value, original_value, metadata
 
 
-def _review_line_items(raw_items: list[dict[str, Any]], ignored_rows: list[Any]) -> list[LineItem]:
+def _reviewed_line_item_keys(payload: ReviewCorrectionSubmission) -> set[str]:
+    metadata = (payload.original_payload or {}).get("correction_metadata") or {}
+    reviewed: set[str] = set()
+    for action in metadata.get("corrected_line_items") or []:
+        if not isinstance(action, dict) or action.get("deleted"):
+            continue
+        if action.get("row_index") is not None:
+            try:
+                index = int(action["row_index"])
+            except (TypeError, ValueError):
+                pass
+            else:
+                reviewed.update({str(index), str(index + 1)})
+        if action.get("row_key") is not None:
+            reviewed.add(str(action["row_key"]))
+    return reviewed
+
+
+def _review_line_items(raw_items: list[dict[str, Any]], ignored_rows: list[Any], reviewed_rows: set[str] | None = None) -> list[LineItem]:
     ignored = {str(item) for item in ignored_rows}
+    reviewed = reviewed_rows or set()
     line_items: list[LineItem] = []
     for index, raw in enumerate(raw_items):
         row_key = str(raw.get("row_key") or raw.get("key") or index)
+        row_was_reviewed = row_key in reviewed or str(index) in reviewed or str(index + 1) in reviewed
         if row_key in ignored or str(index) in ignored or str(index + 1) in ignored:
             continue
         values = raw.get("values") if isinstance(raw.get("values"), dict) else raw
+        source = raw.get("source") or values.get("source") or "human correction"
+        if row_was_reviewed:
+            source = "human verified"
         item_payload = {
             "reference": values.get("reference"),
             "description": values.get("description"),
@@ -352,10 +380,10 @@ def _review_line_items(raw_items: list[dict[str, Any]], ignored_rows: list[Any])
             "tax_rate": _float_or_none(values.get("tax_rate")),
             "line_total_ttc": _float_or_none(values.get("line_total_ttc", values.get("amount_ttc"))),
             "total": _float_or_none(values.get("total", values.get("amount_ttc"))),
-            "confidence": _float_or_none(values.get("confidence")) or _float_or_none(raw.get("confidence")) or 1.0,
+            "confidence": 1.0 if row_was_reviewed else (_float_or_none(values.get("confidence")) or _float_or_none(raw.get("confidence")) or 1.0),
             "bbox": raw.get("bbox"),
             "page": _int_or_none(raw.get("page") or values.get("page")),
-            "source": raw.get("source") or values.get("source") or "human correction",
+            "source": source,
         }
         line_items.append(LineItem(**item_payload))
     return line_items
@@ -545,15 +573,15 @@ def _recompute_amounts_from_line_items(fields: ExtractedInvoiceFields) -> None:
     ttc_values = [(item.line_total_ttc if item.line_total_ttc is not None else item.total) for item in fields.line_items]
     ttc_values = [value for value in ttc_values if value is not None]
     tax_values = [item.tax_amount for item in fields.line_items if item.tax_amount is not None]
-    if ht_values:
+    if ht_values and fields.amount_ht is None:
         fields.amount_ht = round(sum(ht_values), 3)
-    if tax_values:
+    if tax_values and fields.tva_amount is None:
         fields.tva_amount = round(sum(tax_values), 3)
-    if ttc_values:
+    if ttc_values and fields.amount_ttc is None:
         fields.amount_ttc = round(sum(ttc_values), 3)
-    elif fields.amount_ht is not None and fields.tva_amount is not None:
+    elif fields.amount_ttc is None and fields.amount_ht is not None and fields.tva_amount is not None:
         fields.amount_ttc = round(fields.amount_ht + fields.tva_amount, 3)
-    if fields.amount_ht and fields.tva_amount is not None:
+    if fields.tax_rate is None and fields.amount_ht and fields.tva_amount is not None:
         fields.tax_rate = round((fields.tva_amount / fields.amount_ht) * 100, 2)
 
 

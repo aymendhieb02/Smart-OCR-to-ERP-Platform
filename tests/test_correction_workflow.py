@@ -1,8 +1,8 @@
 from datetime import date
 
-from app.core.schemas import Candidate, CorrectionItem, CorrectionSubmission, ExtractedInvoiceFields, LineItem
+from app.core.schemas import Candidate, CorrectionItem, CorrectionSubmission, ExtractedInvoiceFields, LineItem, ReviewCorrectionSubmission
 from app.services import correction_store
-from app.services.correction_store import boost_candidates_from_memory, submit_corrections
+from app.services.correction_store import boost_candidates_from_memory, submit_corrections, validate_review_corrections
 
 
 def configure_temp_store(monkeypatch, tmp_path):
@@ -76,6 +76,54 @@ def test_corrected_line_item_updates_totals(monkeypatch, tmp_path):
     assert response.corrected_fields.tva_amount == 4
     assert response.corrected_fields.amount_ttc == 24
     assert response.validated_erp_json["line_items"][0]["description"] == "Service A"
+
+
+def test_line_item_review_preserves_document_totals_when_present(monkeypatch, tmp_path):
+    configure_temp_store(monkeypatch, tmp_path)
+    item = LineItem(description="Incomplete row", quantity=1, unit_price=50, line_total_ht=50, tax_amount=None, line_total_ttc=50, total=50)
+    payload = CorrectionSubmission(
+        document_id="doc-3b",
+        source_file="invoice.png",
+        detected_fields=base_fields(amount_ht=100, tva_amount=20, amount_ttc=120, tax_rate=20),
+        corrected_line_items=[item],
+    )
+
+    response = submit_corrections(payload)
+
+    assert response.corrected_fields.amount_ht == 100
+    assert response.corrected_fields.tva_amount == 20
+    assert response.corrected_fields.amount_ttc == 120
+
+
+def test_reviewed_line_item_drops_original_review_source(monkeypatch, tmp_path):
+    configure_temp_store(monkeypatch, tmp_path)
+    line = {
+        "description": "6'x3'White Marble Dining Tabte Top Multi Inlay Floral Elephant Art Decor H4952",
+        "quantity": 5,
+        "unit": "each",
+        "unit_price": 6408.49,
+        "line_total_ht": 32042.45,
+        "tax_rate": 10,
+        "line_total_ttc": 35246.69,
+        "total": 35246.69,
+        "source": "p3 reconstructed table review",
+    }
+    payload = ReviewCorrectionSubmission(
+        document_id="doc-3c",
+        source_file="invoice.png",
+        detected_fields=base_fields(line_items=[LineItem(**line)]),
+        line_item_corrections=[line],
+        original_payload={
+            "correction_metadata": {
+                "corrected_line_items": [{"row_index": 0, "field": "tax_rate", "corrected_value": 10}]
+            }
+        },
+    )
+
+    response = validate_review_corrections(payload)
+
+    assert response.corrected_line_items[0].source == "human verified"
+    assert response.row_validation[0]["status"] == "validated"
 
 
 def test_accepted_candidate_becomes_final_erp_value(monkeypatch, tmp_path):

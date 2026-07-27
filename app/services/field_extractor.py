@@ -64,6 +64,7 @@ def extract_with_candidates(
         selected["customer_name"] = party_decision.customer
         candidates.setdefault("customer_name", []).append(party_decision.customer)
     _prefer_consistent_total_candidates(selected, candidates)
+    _repair_inconsistent_selected_totals(selected, candidates)
     _resolve_date_collisions(selected)
     _separate_party_candidates(selected)
     fields = ExtractedInvoiceFields()
@@ -1202,6 +1203,84 @@ def _prefer_consistent_total_candidates(selected: dict[str, Candidate], candidat
                 score=min(best_triplet[0].score, best_triplet[1].score),
                 source="consistent total candidate combination",
             )
+
+
+def _repair_inconsistent_selected_totals(selected: dict[str, Candidate], candidates: dict[str, list[Candidate]]) -> None:
+    current_ht = parse_amount(str(selected.get("amount_ht").value)) if selected.get("amount_ht") else None
+    current_tva = parse_amount(str(selected.get("tva_amount").value)) if selected.get("tva_amount") else None
+    current_ttc = parse_amount(str(selected.get("amount_ttc").value)) if selected.get("amount_ttc") else None
+    if _totals_are_consistent(current_ht, current_tva, current_ttc):
+        _infer_selected_tax_rate(selected)
+        return
+
+    triplet = _best_consistent_total_triplet(candidates)
+    if not triplet:
+        return
+    ht, tva, ttc = triplet
+    selected["amount_ht"], selected["tva_amount"], selected["amount_ttc"] = ht, tva, ttc
+    _infer_selected_tax_rate(selected)
+
+
+def _best_consistent_total_triplet(candidates: dict[str, list[Candidate]]) -> tuple[Candidate, Candidate, Candidate] | None:
+    best: tuple[float, Candidate, Candidate, Candidate] | None = None
+    for ht in _rank_amount_candidates(candidates.get("amount_ht", []), "amount_ht"):
+        ht_amount = parse_amount(str(ht.value))
+        if ht_amount is None:
+            continue
+        for tva in _rank_amount_candidates(candidates.get("tva_amount", []), "tva_amount"):
+            tva_amount = parse_amount(str(tva.value))
+            if tva_amount is None:
+                continue
+            rate = (tva_amount / ht_amount) * 100 if ht_amount else None
+            if rate is None or rate < 0 or rate > 35:
+                continue
+            for ttc in _rank_amount_candidates(candidates.get("amount_ttc", []), "amount_ttc"):
+                ttc_amount = parse_amount(str(ttc.value))
+                if ttc_amount is None or not _totals_are_consistent(ht_amount, tva_amount, ttc_amount):
+                    continue
+                source_bonus = sum(_totals_source_bonus(item) for item in (ht, tva, ttc))
+                score = ht.score + tva.score + ttc.score + source_bonus
+                if best is None or score > best[0]:
+                    best = (score, ht, tva, ttc)
+    return (best[1], best[2], best[3]) if best else None
+
+
+def _totals_are_consistent(ht: float | None, tva: float | None, ttc: float | None) -> bool:
+    if ht is None or tva is None or ttc is None:
+        return False
+    mismatch = abs(round(ht + tva, 3) - ttc)
+    tolerance = max(0.05, min(abs(ttc) * 0.003, max(abs(tva), 1.0) * 0.02))
+    return mismatch <= tolerance
+
+
+def _totals_source_bonus(candidate: Candidate) -> float:
+    source = (candidate.source or "").lower()
+    if any(token in source for token in ("summary table", "semantic totals", "document graph consistent totals", "stacked totals")):
+        return 0.35
+    if "totals block" in source or "document graph totals" in source:
+        return 0.20
+    if "regex" in source:
+        return -0.10
+    return 0.0
+
+
+def _infer_selected_tax_rate(selected: dict[str, Candidate]) -> None:
+    ht_amount = parse_amount(str(selected["amount_ht"].value)) if selected.get("amount_ht") else None
+    tva_amount = parse_amount(str(selected["tva_amount"].value)) if selected.get("tva_amount") else None
+    if not ht_amount or tva_amount is None:
+        return
+    rate = round((tva_amount / ht_amount) * 100, 2)
+    if not 0 <= rate <= 35:
+        return
+    current = selected.get("tax_rate")
+    current_value = parse_amount(str(current.value)) if current else None
+    if current_value is None or abs(current_value - rate) > 0.5:
+        selected["tax_rate"] = Candidate(
+            field="tax_rate",
+            value=rate,
+            score=min(selected["amount_ht"].score, selected["tva_amount"].score),
+            source="consistent total candidate combination",
+        )
 
 
 def _resolve_date_collisions(selected: dict[str, Candidate]) -> None:
