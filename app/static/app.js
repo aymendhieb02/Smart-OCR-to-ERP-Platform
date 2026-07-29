@@ -33,6 +33,7 @@ let autoValidationTimer = null;
 let autoValidationInFlight = false;
 let autoValidationQueued = false;
 const AUTO_VALIDATION_DELAY_MS = 800;
+const MATH_CONSISTENCY_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate"]);
 
 const EDITABLE_FIELDS = [
   "supplier_name",
@@ -495,11 +496,24 @@ function renderFields(fields) {
 function renderFieldCandidateFallback(field, selectedValue) {
   const wrapper = document.createElement("div");
   wrapper.className = "candidate-fallback";
+  const consistency = MATH_CONSISTENCY_FIELDS.has(field) ? lastResponse?.field_consistency?.[field] : null;
   const candidates = [
     ...(lastResponse?.review_candidates?.[field] || []),
     ...(lastResponse?.rejected_candidates?.[field] || []),
   ].filter((candidate) => candidate?.value !== null && candidate?.value !== undefined && candidate?.value !== "");
   if (selectedValue !== null && selectedValue !== undefined && selectedValue !== "") {
+    if (consistency?.status === "inconsistent") {
+      const expected = consistency.expected_value;
+      wrapper.innerHTML = `
+        <div class="candidate-state warning">Warning</div>
+        <div class="candidate-warning-message">${escapeHtml(consistency.message || "This value is mathematically inconsistent with related amount fields.")}</div>
+        ${expected !== null && expected !== undefined ? `<button class="ghost small" type="button" data-expected-field="${escapeAttribute(field)}" data-expected-value="${escapeAttribute(expected)}">Use ${escapeHtml(formatMoney(expected))} instead</button>` : ""}
+      `;
+      wrapper.querySelector("[data-expected-field]")?.addEventListener("click", (event) => {
+        applyExpectedFieldValue(event.currentTarget.dataset.expectedField, event.currentTarget.dataset.expectedValue, consistency);
+      });
+      return wrapper;
+    }
     wrapper.innerHTML = '<span class="candidate-state confirmed">Confirmed</span>';
     return wrapper;
   }
@@ -676,6 +690,13 @@ function renderLineItems(items, rowValidation = []) {
         </tr>
       </thead>
       <tbody>${rows || '<tr><td colspan="9"><div class="note">No line items were extracted. Add a row manually if needed.</div></td></tr>'}</tbody>
+      <tfoot>
+        <tr class="line-items-total-footer" aria-live="polite">
+          <td colspan="6" class="line-items-total-label">Lines total</td>
+          <td id="lineItemsTotalSummary" class="line-items-total-cell">0.00</td>
+          <td colspan="2" class="line-items-total-meta">Total TTC</td>
+        </tr>
+      </tfoot>
     </table>
   `;
   box.querySelector("#addLineItemBtn")?.addEventListener("click", () => addReviewLineItem());
@@ -689,6 +710,7 @@ function renderLineItems(items, rowValidation = []) {
   box.querySelectorAll("[data-restore-line]").forEach((button) => {
     button.addEventListener("click", () => restoreReviewLineItem(Number(button.dataset.index)));
   });
+  updateLineItemsTotalSummary();
 }
 
 function editableLineItemRow(item, index, validationReport) {
@@ -707,6 +729,34 @@ function editableLineItemRow(item, index, validationReport) {
   const reason = validationReport?.validation_reason || item.source || "";
   return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(status)}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">Restore</button><button class="ghost small" type="button" data-delete-line data-index="${index}">Delete</button></div></td></tr>`;
 }
+function updateLineItemsTotalSummary() {
+  const host = document.getElementById("lineItemsTotalSummary");
+  if (!host || !lastResponse) return;
+  const items = lastResponse.detected_fields?.line_items || [];
+  const values = items
+    .map((item) => numberOrNull(item.line_total_ttc ?? item.total))
+    .filter((value) => value !== null);
+  const lineTotal = roundMoney(values.reduce((sum, value) => sum + value, 0));
+  host.textContent = formatMoney(lineTotal);
+  host.title = "Sum of visible line item Total TTC values.";
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const normalized = String(value).replace(/\s+/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 1000) / 1000;
+}
+
+function formatMoney(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(Number(value));
+}
+
 function resetCorrections() {
   correctedFields = {};
   correctedLineItems = [];
@@ -801,6 +851,7 @@ function updateReviewLineItem(index, field, rawValue) {
   correctedLineItems.push({ row_index: index, field, corrected_value: value, corrected_by: "human" });
   updateCorrectionLayer("line_items");
   updateJsonPanels();
+  updateLineItemsTotalSummary();
   scheduleAutoValidation("line_item_edit");
 }
 
@@ -824,14 +875,17 @@ function addReviewLineItem() {
   renderDynamicReview();
   updateCorrectionLayer("line_items");
   updateJsonPanels();
-  scheduleAutoValidation("line_item_added");
 }
 
 function deleteReviewLineItem(index) {
   const items = ensureLineItems();
+  if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+    showTransientNote("No matching line item is available to delete.");
+    return;
+  }
   items.splice(index, 1);
   syncLineItemsToResponse();
-  ignoredRows.push(index);
+  ignoredRows = ignoredRows.filter((item) => item !== index && item !== String(index) && item !== index + 1 && item !== String(index + 1));
   correctedLineItems.push({ row_index: index, deleted: true, corrected_by: "human" });
   renderLineItems(items);
   renderDynamicReview();
@@ -1193,7 +1247,7 @@ function renderDynamicGridTable(table, rows) {
       event.stopPropagation();
       row.status = "ignored";
       tr.className = "ignored";
-      ignoredRows.push(row.key, lineIndexFromKey(row.key));
+      if (row.key) ignoredRows.push(row.key);
       correctedLineItems.push({ row_key: row.key, status: "ignored" });
       renderDynamicReview();
       updateCorrectionLayer(table.id);
@@ -1202,12 +1256,19 @@ function renderDynamicGridTable(table, rows) {
     });
     tr?.querySelector("[data-restore-row]")?.addEventListener("click", (event) => {
       event.stopPropagation();
-      restoreReviewLineItem(lineIndexFromKey(row.key));
+      row.status = "validated";
+      tr.className = "validated";
+      ignoredRows = ignoredRows.filter((item) => item !== row.key && item !== lineIndexFromKey(row.key));
+      correctedLineItems.push({ row_key: row.key, status: "validated" });
+      renderDynamicReview();
+      updateCorrectionLayer(table.id);
+      updateJsonPanels();
+      scheduleAutoValidation("dynamic_row_restored");
     });
     tr?.querySelector("[data-delete-row]")?.addEventListener("click", (event) => {
       event.stopPropagation();
       row.status = "ignored";
-      ignoredRows.push(row.key, lineIndexFromKey(row.key));
+      if (row.key) ignoredRows.push(row.key);
       correctedLineItems.push({ row_key: row.key, deleted: true });
       const tableData = (lastResponse.dynamic_tables || []).find((item) => item.id === table.id);
       if (tableData) tableData.rows = tableData.rows.filter((item) => item.key !== row.key);
@@ -1337,7 +1398,6 @@ function addDynamicLineItem(table) {
   renderDynamicReview();
   updateJsonPanels();
   updateCorrectionLayer(table.id);
-  scheduleAutoValidation("dynamic_line_item_added");
 }
 
 function updateCorrectionLayer(tableId) {
@@ -1619,6 +1679,12 @@ function extractionReasons(type, payload) {
 }
 
 
+function stableIgnoredRows() {
+  return ignoredRows
+    .filter((item) => typeof item === "string" && item.trim() && !/^\d+$/.test(item.trim()))
+    .filter((item, index, values) => values.indexOf(item) === index);
+}
+
 function buildReviewCorrectionPayload() {
   return {
     document_id: lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
@@ -1626,7 +1692,7 @@ function buildReviewCorrectionPayload() {
     detected_fields: lastResponse.detected_fields || {},
     field_corrections: buildCorrectedFieldPayload(),
     line_item_corrections: lastResponse.detected_fields?.line_items || [],
-    ignored_rows: ignoredRows,
+    ignored_rows: stableIgnoredRows(),
     original_payload: lastResponse,
   };
 }
@@ -1654,6 +1720,7 @@ function applyCorrectionValidationResponse(data, { rerenderEditableRows = true }
   lastResponse.all_line_items = normalizeLineItems(lastResponse.detected_fields?.line_items || data.corrected_line_items || []);
   lastResponse.row_validation = data.row_validation || lastResponse.row_validation;
   lastResponse.financial_reasoning = data.financial_reasoning || lastResponse.financial_reasoning;
+  lastResponse.field_consistency = data.field_consistency || data.financial_reasoning?.field_consistency || lastResponse.field_consistency;
   lastResponse.confidence_breakdown = data.confidence_breakdown || lastResponse.confidence_breakdown;
   lastResponse.erp_readiness = data.erp_readiness || lastResponse.erp_readiness;
   lastResponse.invoice_validation_report = data.invoice_validation_report || lastResponse.invoice_validation_report;
@@ -1802,6 +1869,25 @@ function acceptSuggestion(index) {
   updateReviewField(suggestion.field, value);
   renderDynamicReview();
   showTransientNote(`Accepted suggestion for ${suggestion.field}.`);
+}
+
+function applyExpectedFieldValue(field, value, consistency) {
+  if (!field) return;
+  const input = document.querySelector(`[data-field="${cssEscape(field)}"]`);
+  if (input) input.value = value ?? "";
+  correctedFields[field] = {
+    original_value: getFieldOriginalValue(field),
+    corrected_value: value,
+    corrected_by: "human",
+    user_action: "edited",
+    confidence: 1,
+    source: "field_consistency",
+    expected_value: consistency?.expected_value,
+    message: consistency?.message,
+  };
+  updateReviewField(field, value);
+  renderDynamicReview();
+  showTransientNote(`Applied consistency suggestion for ${field}. Save to recheck.`);
 }
 
 function selectCandidate(entry) {

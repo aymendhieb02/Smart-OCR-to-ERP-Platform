@@ -1,0 +1,12 @@
+# Optional ML/model dependencies.
+# Install only when enabling one of:
+# - INVOICE_OCR_ENABLE_TABLE_TRANSFORMER=true
+# - INVOICE_OCR_ENABLE_LAYOUT_MODEL=true
+-r requirements.txt
+
+torch>=2.2.0
+torchvision>=0.17.0
+transformers>=4.42.0
+timm>=1.0.0
+doclayout-yolo>=0.0.4
+huggingface_hub>=0.23.0

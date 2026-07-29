@@ -15,7 +15,6 @@ def build_review_assistant(response: Any) -> dict[str, Any]:
     issues.extend(_party_issues(response, party, "customer"))
     issues.extend(_line_item_issues(response))
     issues.extend(_financial_issues(response))
-    issues.extend(_hybrid_llm_issues(response))
     issues.extend(_validation_issues(response))
 
     confidence = _assistant_confidence(issues, response)
@@ -29,54 +28,6 @@ def build_review_assistant(response: Any) -> dict[str, Any]:
         "erp_impact": _erp_impact(response),
         "reviewer_control": "Assistant suggestions are advisory only. No extraction value is changed automatically.",
     }
-
-
-def _hybrid_llm_issues(response: Any) -> list[dict[str, Any]]:
-    hybrid = ((response.extraction_debug or {}).get("hybrid_llm") or {})
-    accepted = hybrid.get("accepted_corrections") or []
-    rejected = hybrid.get("rejected_corrections") or []
-    proposals = hybrid.get("proposals") or []
-    if not hybrid.get("invoked") and not proposals:
-        return []
-    issues = []
-    if accepted:
-        evidence = [_correction_evidence(item, index + 1) for index, item in enumerate(accepted[:8])]
-        issues.append(build_issue(
-            issue_type="hybrid_llm_accepted_corrections",
-            title="Safe LLM corrections available",
-            explanation="The LLM proposed corrections that passed the evidence gate. They are shown for review and are not applied unless validated-apply mode is explicitly enabled.",
-            confidence=_average(_proposal_confidence(item) for item in accepted),
-            suspected_problem="deterministic_extraction_uncertain",
-            suggested_correction={"accepted_corrections": accepted},
-            evidence=evidence,
-            financial_reasoning=(hybrid.get("hybrid_candidate_result") or {}).get("financial_reasoning"),
-            erp_impact=_hybrid_erp_impact(hybrid),
-        ))
-    if rejected:
-        evidence = [_correction_evidence(item, index + 1) for index, item in enumerate(rejected[:8])]
-        issues.append(build_issue(
-            issue_type="hybrid_llm_rejected_corrections",
-            title="Unsafe LLM proposals rejected",
-            explanation="One or more LLM proposals failed evidence, safety, or validation checks.",
-            confidence=_average(_proposal_confidence(item) for item in rejected),
-            suspected_problem="unsafe_or_unsupported_llm_proposal",
-            suggested_correction=None,
-            evidence=evidence,
-            financial_reasoning=None,
-            erp_impact="Rejected proposals are not used for ERP export, but reviewers can inspect why they failed.",
-        ))
-    if hybrid.get("fallback_reason"):
-        issues.append(build_issue(
-            issue_type="hybrid_llm_fallback",
-            title="Hybrid result kept deterministic output",
-            explanation=str(hybrid.get("fallback_reason")),
-            confidence=0.8,
-            suspected_problem="hybrid_not_applied",
-            suggested_correction=None,
-            evidence=[{"rank": 1, "value": hybrid.get("final_source"), "confidence": 1.0, "reason": hybrid.get("fallback_reason")}],
-            erp_impact="The final response remains deterministic unless safe validated apply is enabled.",
-        ))
-    return issues
 
 
 def _party_issues(response: Any, party: dict[str, Any], role: str) -> list[dict[str, Any]]:
@@ -220,32 +171,3 @@ def _average(values) -> float:
     numeric = [_number(value) for value in values]
     numeric = [value for value in numeric if value is not None]
     return round(sum(numeric) / len(numeric), 3) if numeric else 0.0
-
-
-def _correction_evidence(item: dict[str, Any], rank: int) -> dict[str, Any]:
-    proposal = item.get("proposal") or {}
-    return {
-        "rank": rank,
-        "value": proposal.get("proposed_value"),
-        "confidence": proposal.get("confidence"),
-        "reason": item.get("reason") or proposal.get("reason"),
-        "field": proposal.get("field"),
-        "operation": proposal.get("operation"),
-        "old_value": proposal.get("old_value"),
-        "evidence_refs": proposal.get("evidence_refs") or [],
-        "checks": item.get("checks") or {},
-    }
-
-
-def _proposal_confidence(item: dict[str, Any]) -> float:
-    return _number((item.get("proposal") or {}).get("confidence")) or 0.0
-
-
-def _hybrid_erp_impact(hybrid: dict[str, Any]) -> str:
-    candidate = hybrid.get("hybrid_candidate_result") or {}
-    readiness = candidate.get("erp_readiness") or {}
-    if readiness.get("ready"):
-        return "Hybrid candidate would make the document ERP ready after validation."
-    if readiness.get("erp_ready_status"):
-        return f"Hybrid candidate ERP status: {readiness['erp_ready_status']}."
-    return "Hybrid correction is advisory unless validated and explicitly applied."

@@ -611,6 +611,17 @@ button:disabled {
   color: #8a5a00;
 }
 
+.candidate-state.warning {
+  background: #fff4d6;
+  color: var(--amber);
+}
+
+.candidate-warning-message {
+  color: var(--amber);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .candidate-state.missing {
   background: #f4f5f7;
   color: var(--muted);
@@ -897,6 +908,35 @@ button:disabled {
 .line-items {
   overflow-x: auto;
 }
+
+.line-items-total-footer td {
+  background: #f8fafc;
+  border-bottom: 0;
+}
+
+.line-items-total-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.line-items-total-cell {
+  border: 2px solid var(--blue);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.line-items-total-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 
 table {
   width: 100%;

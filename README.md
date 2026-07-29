@@ -1,4 +1,4 @@
-﻿# Smart OCR-to-ERP Platform
+# Smart OCR-to-ERP Platform
 
 Smart OCR-to-ERP Platform is a FastAPI document-intelligence application that reads invoice documents, extracts ERP fields, reconstructs line items, validates financial consistency, and gives reviewers a visual workspace before ERP export.
 
@@ -47,10 +47,9 @@ ERP extraction needs traceability. The normal request path avoids automatic gene
 - faster and cheaper to run;
 - testable with regression fixtures;
 - safer for totals, VAT, and row-level arithmetic;
-- independent of local LLM availability;
 - tied to OCR evidence, layout geometry, and validation rules.
 
-Experimental advisory LLM files may exist in the repository for research comparison, but the default production/demo path does not rely on them and cannot bypass ERP validation.
+The production/demo path is deterministic end to end and cannot bypass ERP validation.
 
 ## Core Capabilities
 
@@ -104,15 +103,146 @@ app/
   services/            OCR, layout, extraction, validation, ERP, review services
   static/              browser review UI
 dataset/
-  demo/                demo documents
-  images/              sample images
-  labels/              sample labels
+  demo/                optional local demo documents
+  images/              optional local sample images
+  labels/              optional local sample labels
   manual_ground_truth_benchmark/
 docs/                  architecture, benchmark, setup, demo notes
-scripts/               benchmark and analysis utilities
+scripts/               benchmark and analysis utilities; evaluate_dataset is used by one API route
 tests/                 regression and integration tests
-run.py                 local application entry point
-requirements.txt       Python dependencies
+run.py                 local development entry point
+Dockerfile             multi-stage production container
+.dockerignore          excludes caches, datasets, tests, docs, local envs, and generated outputs
+.env.example           environment variable template
+requirements.txt       core production dependencies
+requirements-ml.txt    optional Table Transformer / DocLayout-YOLO dependencies
+requirements-dev.txt   development, tests, and benchmark/report dependencies
+```
+
+## Client Delivery Package
+
+Recommended clean source package:
+
+```text
+invoice-ocr-erp/
+  app/
+  scripts/
+  run.py
+  README.md
+  Dockerfile
+  .dockerignore
+  .env.example
+  requirements.txt
+  requirements-ml.txt
+  requirements-dev.txt
+```
+
+Recommended exclusions:
+
+```text
+.venv/
+.git/
+.cache/
+outputs/
+analysis/
+__pycache__/
+.pytest_cache/
+dataset/
+tests/
+docs/
+models/
+*.log
+*.zip
+*.rar
+final_delivery_outputs/
+```
+
+Reasoning:
+
+- The production API only needs `app/`, the startup files, requirements, and `scripts/` because `/evaluate-dataset` calls `scripts/evaluate_dataset.py`.
+- `dataset/` is excluded from the clean delivery package because it can contain local benchmarks, generated reports, and private or large sample files. If the client needs demo documents, provide a separate small `dataset/demo/` bundle after reviewing confidentiality.
+- `tests/` and `docs/` are useful for engineering handoff but not required for a minimal production runtime. Include them in a developer handoff package if the client will maintain the project.
+- `.venv/`, `.cache/`, `outputs/`, `models/`, and archive/log files should never be included in the clean source zip.
+
+Example PowerShell packaging command from the parent folder:
+
+```powershell
+Compress-Archive -Path .\invoice-ocr-erp\app, .\invoice-ocr-erp\scripts, .\invoice-ocr-erp\run.py, .\invoice-ocr-erp\README.md, .\invoice-ocr-erp\Dockerfile, .\invoice-ocr-erp\.dockerignore, .\invoice-ocr-erp\.env.example, .\invoice-ocr-erp\requirements.txt, .\invoice-ocr-erp\requirements-ml.txt, .\invoice-ocr-erp\requirements-dev.txt -DestinationPath .\invoice-ocr-erp-client-source.zip -Force
+```
+
+## Local Setup
+
+Create a fresh virtual environment:
+
+```powershell
+cd D:\Stage_udgroup\invoice-ocr-erp
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+python run.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000/
+```
+
+For development and tests:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m compileall app scripts tests
+python -m pytest -q
+```
+
+For optional Table Transformer or DocLayout-YOLO experiments:
+
+```powershell
+python -m pip install -r requirements-ml.txt
+```
+
+Then enable only what is needed in `.env`:
+
+```env
+INVOICE_OCR_ENABLE_TABLE_TRANSFORMER=true
+INVOICE_OCR_ENABLE_LAYOUT_MODEL=true
+```
+
+These optional ML features are disabled by default and are not required for the deterministic production path.
+
+## Docker Setup
+
+Build the lean deterministic API image:
+
+```powershell
+docker build -t invoice-ocr-erp:latest --build-arg INSTALL_ML=false .
+```
+
+Run it:
+
+```powershell
+docker run --rm -p 8000:8000 --env-file .env invoice-ocr-erp:latest
+```
+
+Build with optional ML dependencies:
+
+```powershell
+docker build -t invoice-ocr-erp:ml --build-arg INSTALL_ML=true .
+```
+
+Run with optional ML flags only if model weights/configuration are available:
+
+```powershell
+docker run --rm -p 8000:8000 --env-file .env -e INVOICE_OCR_ENABLE_TABLE_TRANSFORMER=true invoice-ocr-erp:ml
+```
+
+The container exposes port `8000` and starts:
+
+```text
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
 ```
 
 ## Quick Start
@@ -180,7 +310,7 @@ Smoke benchmark:
 Multi-dataset smoke benchmark:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scriptsenchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
+.\.venv\Scripts\python.exe .\scripts\benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
 ```
 
 ## Recommended Demo Flow
@@ -212,4 +342,3 @@ True accuracy claims require manually verified ground-truth labels.
 ## License
 
 Add the license that matches your intended usage before distributing this project commercially.
-

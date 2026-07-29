@@ -2,7 +2,7 @@
 
 ## Status
 
-Deterministic Engine v1.0 freezes the rule-based OCR-to-ERP pipeline as the official baseline before the Hybrid LLM phase. The default profile is stable and reproducible:
+Deterministic Engine v1.0 freezes the rule-based OCR-to-ERP pipeline as the official baseline. The default profile is stable and reproducible:
 
 - OCR profile: `optimized_mobile_v4`
 - Table reconstruction profile: `p3_stable`
@@ -112,7 +112,7 @@ The table metrics are frozen as the stable deterministic baseline. The final dia
 
 ## Supported Languages
 
-The deterministic pipeline includes support for common French and English invoice labels. Arabic labels are partially supported through keyword and OCR text handling, with full Arabic robustness left for the Hybrid LLM phase.
+The deterministic pipeline includes support for common French and English invoice labels. Arabic labels are partially supported through keyword and OCR text handling, with deeper Arabic robustness left as a deterministic extraction improvement area.
 
 ## Supported Document Types
 
@@ -141,13 +141,13 @@ The deterministic pipeline includes support for common French and English invoic
 
 ## Extension Points
 
-The next phase should add Hybrid LLM reasoning after deterministic extraction, not replace the deterministic baseline. Suggested extension points:
+Future work should keep the production path deterministic and evidence-grounded. Suggested extension points:
 
-- LLM-assisted table row recovery for unresolved fragments.
-- LLM-assisted party disambiguation when deterministic Top-N candidates are close.
-- LLM-assisted validation explanation and correction suggestions.
+- Improved table row recovery for unresolved OCR fragments.
+- Stronger party disambiguation when deterministic Top-N candidates are close.
+- Better validation explanations and correction suggestions.
 - Human correction memory feeding candidate scores.
 
 ## Freeze Statement
 
-Deterministic v1.0 is frozen as the baseline. Future improvements should be tracked under a new Hybrid LLM phase or a new deterministic v1.x maintenance scope.
+Deterministic v1.0 is frozen as the baseline. Future improvements should be tracked under deterministic v1.x maintenance scopes.

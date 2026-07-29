@@ -307,6 +307,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             validation_report=quality_gate.validation_report,
             row_validation=row_validation,
             financial_reasoning=financial_reasoning,
+            field_consistency=financial_reasoning.get("field_consistency", {}),
             confidence_breakdown=confidence_breakdown,
             erp_readiness=erp_readiness,
             invoice_validation_report=invoice_report,
@@ -316,14 +317,6 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             fraud_indicators=fraud,
         )
         apply_public_bbox_contract(response)
-        if settings.enable_llm_resolver:
-            from app.services.llm_router import resolve_if_needed
-
-            llm_route = resolve_if_needed(response)
-            response.extraction_debug["hybrid_llm"] = llm_route.to_debug_dict()
-            if llm_route.final_response is not None:
-                response = llm_route.final_response
-                response.extraction_debug["hybrid_llm"] = llm_route.to_debug_dict()
         response.review_assistant = build_review_assistant(response)
     timings["public_boxes_count"] = count_public_ocr_boxes(response)
     timings["bbox_loss_stage"] = bbox_loss_stage(response)

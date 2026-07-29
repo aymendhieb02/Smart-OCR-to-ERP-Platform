@@ -68,7 +68,6 @@ class FakeEngine:
 
 
 def test_timed_pipeline_collects_records_without_changing_public_response(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.services.pipeline_runner.settings.enable_llm_resolver", False)
     image_path = tmp_path / "invoice.png"
     cv2.imwrite(str(image_path), np.full((180, 300, 3), 255, dtype=np.uint8))
     timer = PipelineTimer(enabled=True)
@@ -91,5 +90,3 @@ def test_timed_pipeline_collects_records_without_changing_public_response(tmp_pa
     assert "response_preparation" in timing_result["stages"]
     assert "performance_timings" not in public_payload
     assert "timing_result" not in public_payload
-    assert "hybrid_llm" not in response.extraction_debug
-

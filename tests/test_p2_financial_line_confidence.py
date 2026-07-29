@@ -104,3 +104,18 @@ def test_valid_confidence_keeps_component_breakdown() -> None:
 
     assert result["overall_confidence"] > 0.85
     assert result["ocr_confidence"] == 0.91
+
+
+
+def test_financial_reasoning_warns_when_line_ttc_sum_differs_from_invoice_ttc() -> None:
+    fields = ExtractedInvoiceFields(amount_ht=100.0, tva_amount=10.0, amount_ttc=110.0, tax_rate=10.0)
+    lines = [
+        LineItem(description="A", quantity=1, unit_price=50, line_total_ht=50, line_total_ttc=55),
+        LineItem(description="B", quantity=1, unit_price=40, line_total_ht=40, line_total_ttc=44),
+    ]
+
+    result = reason_financials(fields, lines)
+
+    assert result["checks"]["line_sum_to_ttc"]["actual"] == 99
+    assert result["checks"]["line_sum_to_ttc"]["passed"] is False
+    assert any("line TTC totals sum to 99" in warning for warning in result["financial_warnings"])

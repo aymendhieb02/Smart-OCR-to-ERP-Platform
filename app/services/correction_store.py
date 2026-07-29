@@ -233,6 +233,7 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         invoice_validation_report=report,
         row_validation=row_validation,
         financial_reasoning=financial,
+        field_consistency=financial.get("field_consistency", {}),
         confidence_breakdown=confidence,
         erp_readiness=readiness,
         correction_metadata={
