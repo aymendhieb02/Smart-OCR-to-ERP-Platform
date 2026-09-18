@@ -51,6 +51,16 @@ PROFILES: dict[str, OCRProfile] = {
         use_gpu=False,
         preprocessing_profile="current",
     ),
+    "optimized_mobile_v5": OCRProfile(
+        name="optimized_mobile_v5",
+        detector="PP-OCRv5_mobile_det",
+        recognizer="latin_PP-OCRv5_mobile_rec",
+        cpu_threads=4,
+        input_max_side=1600,
+        enable_mkldnn=False,
+        use_gpu=False,
+        preprocessing_profile="current",
+    ),
 }
 
 

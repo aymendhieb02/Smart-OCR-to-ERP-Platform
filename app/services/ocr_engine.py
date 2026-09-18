@@ -411,6 +411,7 @@ def _ocr_cache_key(
 def _paddle_fingerprint() -> str:
     ocr_config = effective_ocr_config()
     payload = {
+        "ocr_profile": ocr_config["ocr_profile"],
         "lang": "en",
         "enable_mkldnn": ocr_config["enable_mkldnn"],
         "cpu_threads": ocr_config["cpu_threads"],
