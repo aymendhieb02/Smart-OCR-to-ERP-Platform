@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import time
 
@@ -13,7 +14,7 @@ from app.services.erp_mapper import build_erp_json, map_to_flat_erp
 from app.services.extraction_quality import apply_extraction_quality_gate, build_validated_erp_json
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
-from app.services.file_loader import load_document
+from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
 from app.services.layout_model.layout_model_router import detect_layout_blocks_with_model
@@ -32,6 +33,92 @@ from app.services.fraud_indicators import detect_fraud_indicators
 from app.services.invoice_validation_report import build_invoice_validation_report
 from app.services.performance_timer import PipelineTimer
 from app.services.review_assistant import build_review_assistant
+from app.services.dossier_segmentation import (
+    LogicalDocumentGroup,
+    PageClassification,
+    classify_pages,
+    group_logical_documents,
+)
+
+
+@dataclass(frozen=True)
+class ProcessedLogicalDocument:
+    group: LogicalDocumentGroup
+    response: ProcessInvoiceResponse
+
+
+@dataclass(frozen=True)
+class DossierProcessResult:
+    source_file: str
+    page_count: int
+    page_classifications: tuple[PageClassification, ...]
+    logical_documents: tuple[ProcessedLogicalDocument, ...]
+    ocr_engine: str
+    timings: dict
+
+
+def process_dossier_file(
+    path: Path,
+    *,
+    original_filename: str | None = None,
+    ocr_engine: OCREngine | None = None,
+    persist_erp_json: bool = False,
+    ocr_mode: str | None = None,
+    use_ocr_cache: bool = True,
+    refresh_ocr_cache: bool = False,
+    timing_recorder: PipelineTimer | None = None,
+) -> DossierProcessResult:
+    """OCR a dossier once, then reuse the existing pipeline per logical document."""
+    timer = timing_recorder
+    timings: dict = {}
+    source_file = original_filename or path.name
+    with _timer_stage(timer, "total_pipeline", document=source_file, dossier=True):
+        stage_started = time.perf_counter()
+        with _timer_stage(timer, "file_loading", input_type=path.suffix.lower(), dossier=True):
+            document = load_document(path, source_file, timing_recorder=timer)
+        timings["file_loading"] = round(time.perf_counter() - stage_started, 4)
+        _set_document_timer_metadata(timer, document)
+
+        stage_started = time.perf_counter()
+        with _timer_stage(timer, "ocr_engine_initialization", ocr_mode=ocr_mode, dossier=True):
+            engine = ocr_engine or OCREngine(
+                mode=ocr_mode,
+                use_disk_cache=use_ocr_cache,
+                refresh_cache=refresh_ocr_cache,
+                timing_recorder=timer,
+            )
+            if ocr_engine is not None:
+                setattr(engine, "timing_recorder", timer)
+        ocr_result = engine.run(document.images, document.embedded_text)
+        timings.update(getattr(engine, "last_timings", {}))
+        timings["ocr"] = round(time.perf_counter() - stage_started, 4)
+
+        page_classifications = classify_pages(ocr_result)
+        groups = group_logical_documents(page_classifications)
+        processed: list[ProcessedLogicalDocument] = []
+        for group in groups:
+            logical_document = _logical_loaded_document(document, group.pages)
+            logical_ocr = _logical_ocr_result(ocr_result, group.pages)
+            response = _process_ocr_document(
+                logical_document,
+                logical_ocr,
+                timings=dict(timings),
+                include_preview=False,
+                persist_erp_json=persist_erp_json,
+                ocr_engine=engine,
+                timing_recorder=timer,
+                physical_page_numbers=group.pages,
+            )
+            processed.append(ProcessedLogicalDocument(group=group, response=response))
+
+    return DossierProcessResult(
+        source_file=source_file,
+        page_count=ocr_result.page_count,
+        page_classifications=tuple(page_classifications),
+        logical_documents=tuple(processed),
+        ocr_engine=ocr_result.engine,
+        timings=timings,
+    )
 
 
 def process_document_file(
@@ -88,7 +175,7 @@ def process_loaded_document(
     return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
-def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None) -> ProcessInvoiceResponse:
+def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None) -> ProcessInvoiceResponse:
     timer = timing_recorder
     with _timer_stage(timer, "response_preparation", part="preview_generation"):
         document_preview = generate_document_preview(document) if include_preview else None
@@ -118,7 +205,14 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     if ocr_engine and ocr_engine.mode == "balanced" and not extraction_debug.get("fallback_recovery"):
         requested_fallbacks = determine_required_fallbacks(fields=fields, ocr_result=ocr_result, extraction_debug=extraction_debug)
         if requested_fallbacks:
-            fallback_lines = ocr_engine.run_fallback_regions(document.images, requested_fallbacks)
+            if physical_page_numbers is None:
+                fallback_lines = ocr_engine.run_fallback_regions(document.images, requested_fallbacks)
+            else:
+                fallback_lines = ocr_engine.run_fallback_regions(
+                    document.images,
+                    requested_fallbacks,
+                    page_numbers=physical_page_numbers,
+                )
             if fallback_lines:
                 ocr_result = _merge_ocr_result(ocr_result, fallback_lines)
                 layout_analyzer = LayoutAnalyzer(ocr_result.lines)
@@ -328,6 +422,35 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     response.extraction_debug["stage_timings"] = timings
     _set_result_timer_metadata(timer, response, candidates)
     return response
+
+
+def _logical_loaded_document(document: LoadedDocument, pages: tuple[int, ...]) -> LoadedDocument:
+    images = []
+    for page_number in pages:
+        index = page_number - 1
+        if index < 0 or index >= len(document.images):
+            raise ValueError(f"Logical document references unavailable physical page {page_number}")
+        images.append(document.images[index])
+    return LoadedDocument(
+        source_file=document.source_file,
+        extension=document.extension,
+        embedded_text="",
+        images=images,
+    )
+
+
+def _logical_ocr_result(ocr_result: OCRResult, pages: tuple[int, ...]) -> OCRResult:
+    selected = set(pages)
+    lines = [line.model_copy(deep=True) for line in ocr_result.lines if line.page_number in selected]
+    confidence_values = [line.confidence for line in lines if line.confidence is not None]
+    confidence = round(sum(confidence_values) / len(confidence_values), 3) if confidence_values else None
+    return OCRResult(
+        raw_text="\n".join(line.text for line in lines),
+        lines=lines,
+        confidence=confidence,
+        engine=ocr_result.engine,
+        page_count=len(pages),
+    )
 
 
 def _retry_layout_if_unmapped(layout_analyzer: LayoutAnalyzer, layout_blocks: list, ocr_lines: list[OCRLine]) -> tuple[list, dict[str, Any]]:

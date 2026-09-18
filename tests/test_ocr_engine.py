@@ -243,6 +243,34 @@ def test_fast_and_balanced_use_one_paddle_call_per_page(monkeypatch, tmp_path):
     assert balanced.last_timings["total_paddle_calls"] == 1
 
 
+def test_fallback_regions_preserve_original_physical_page_number(monkeypatch):
+    result = [[[[10, 10], [80, 10], [80, 25], [10, 25]], ("Total 100", 0.9)]]
+    monkeypatch.setattr("app.services.ocr_engine._get_paddle_instance", lambda: DummyPaddle(result))
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    region = OCRRegion("totals_area", image, 0, 0, (0, 0, 200, 100))
+    monkeypatch.setattr("app.services.ocr_engine.build_ocr_regions", lambda _image: [region])
+
+    lines = OCREngine(use_disk_cache=False).run_fallback_regions(
+        [image],
+        ["totals_area"],
+        page_numbers=[3],
+    )
+
+    assert lines
+    assert {line.page_number for line in lines} == {3}
+
+
+def test_fallback_page_number_count_must_match_images():
+    engine = OCREngine(use_disk_cache=False)
+
+    with __import__("pytest").raises(ValueError, match="one original page number per image"):
+        engine.run_fallback_regions(
+            [np.zeros((20, 20, 3), dtype=np.uint8)],
+            ["totals_area"],
+            page_numbers=[2, 3],
+        )
+
+
 def test_accurate_keeps_regional_recovery_without_duplicate_calls(monkeypatch, tmp_path):
     result = [[[[10, 10], [80, 10], [80, 25], [10, 25]], ("Invoice", 0.9)]]
     monkeypatch.setattr("app.services.ocr_engine._get_paddle_ocr", lambda: DummyPaddle(result))
