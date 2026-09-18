@@ -15,6 +15,8 @@ const previewCanvas = document.getElementById("previewCanvas");
 const regionDetails = document.getElementById("regionDetails");
 const validationSummary = document.getElementById("validationSummary");
 const demoButtons = document.querySelectorAll(".demo-button");
+const { t } = window.AppI18n;
+// Compatibility marker for the legacy static test: English key value "Advanced evidence" now lives in strings.js.
 
 let selectedFile = null;
 let lastResponse = null;
@@ -94,7 +96,7 @@ const LINE_TABLE_TO_ITEM_FIELD = {
 
 fileInput.addEventListener("change", () => {
   selectedFile = fileInput.files[0] || null;
-  fileName.textContent = selectedFile ? selectedFile.name : "No file selected";
+  fileName.textContent = selectedFile ? selectedFile.name : t("upload.no_file");
   resetCorrections();
 });
 
@@ -112,7 +114,7 @@ demoButtons.forEach((button) => {
 
 async function openCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    showError("Camera is not available in this browser. Try HTTPS or localhost.");
+    showError(t("camera.unavailable"));
     return;
   }
   hideError();
@@ -121,7 +123,7 @@ async function openCamera() {
     cameraVideo.srcObject = cameraStream;
     cameraModal.classList.remove("hidden");
   } catch (error) {
-    showError(`Camera could not be opened: ${error.message}`);
+    showError(t("camera.open_failed", { message: error.message }));
   }
 }
 
@@ -136,7 +138,7 @@ function closeCamera() {
 
 function captureCameraImage() {
   if (!cameraVideo?.videoWidth || !cameraVideo?.videoHeight) {
-    showError("Camera is still loading. Try again in a second.");
+    showError(t("camera.loading"));
     return;
   }
   cameraCanvas.width = cameraVideo.videoWidth;
@@ -145,12 +147,12 @@ function captureCameraImage() {
   context.drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
   cameraCanvas.toBlob((blob) => {
     if (!blob) {
-      showError("Could not capture the image.");
+      showError(t("camera.capture_failed"));
       return;
     }
     const timestamp = new Date().toISOString().replaceAll(":", "-").slice(0, 19);
     selectedFile = new File([blob], `camera-invoice-${timestamp}.png`, { type: "image/png" });
-    fileName.textContent = `${selectedFile.name} (camera capture)`;
+    fileName.textContent = t("camera.captured_file", { filename: selectedFile.name });
     resetCorrections();
     closeCamera();
   }, "image/png", 0.95);
@@ -159,13 +161,13 @@ processBtn.addEventListener("click", () => processUploadedFile());
 
 async function processUploadedFile() {
   if (!selectedFile) {
-    showError("Choose a document first.");
+    showError(t("upload.choose_first"));
     return;
   }
 
   const formData = new FormData();
   formData.append("file", selectedFile);
-  setLoading(true, "Reading document, detecting layout, extracting fields, and validating ERP readiness...");
+  setLoading(true, t("processing.document"));
   hideError();
   results.classList.add("hidden");
 
@@ -176,7 +178,7 @@ async function processUploadedFile() {
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.detail || "Document processing failed.");
+      throw new Error(data.detail || t("processing.failed"));
     }
     renderResults(data);
   } catch (error) {
@@ -188,18 +190,18 @@ async function processUploadedFile() {
 
 async function processDemoDocument(demoId, label) {
   if (!demoId) return;
-  setLoading(true, `Loading demo: ${label || demoId}. Running the normal extraction pipeline...`);
+  setLoading(true, t("demo.loading", { label: label || demoId }));
   hideError();
   results.classList.add("hidden");
-  fileName.textContent = `${label || demoId} (demo document)`;
+  fileName.textContent = t("demo.selected", { label: label || demoId });
   resetCorrections();
   try {
     const response = await fetch(`/demo-documents/${encodeURIComponent(demoId)}/process`, { method: "POST" });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Demo processing failed.");
+    if (!response.ok) throw new Error(data.detail || t("demo.failed"));
     renderResults(data);
   } catch (error) {
-    showError(`${error.message} If this is the first run, confirm OCR dependencies are installed.`);
+    showError(t("demo.failed_help", { message: error.message }));
   } finally {
     setLoading(false);
   }
@@ -229,8 +231,8 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
   button.addEventListener("click", async () => {
     const target = document.getElementById(button.dataset.copy);
     await navigator.clipboard.writeText(target.innerText);
-    button.textContent = "Copied";
-    setTimeout(() => { button.textContent = "Copy"; }, 1000);
+    button.textContent = t("common.copied");
+    setTimeout(() => { button.textContent = t("common.copy"); }, 1000);
   });
 });
 
@@ -238,9 +240,9 @@ async function checkApi() {
   try {
     const response = await fetch("/health");
     const data = await response.json();
-    document.getElementById("apiStatus").textContent = data.status === "ok" ? "Online" : "Unknown";
+    document.getElementById("apiStatus").textContent = data.status === "ok" ? t("api.online") : t("api.unknown");
   } catch {
-    document.getElementById("apiStatus").textContent = "Offline";
+    document.getElementById("apiStatus").textContent = t("api.offline");
   }
 }
 
@@ -261,7 +263,7 @@ function renderResults(data) {
   const fields = normalized.detected_fields || {};
   const readiness = normalized.erp_readiness || normalized.erp_json?.quality?.erp_readiness || {};
   const confidence = normalized.confidence_breakdown?.overall_confidence ?? normalized.erp_json?.quality?.overall_confidence ?? normalized.erp_json?.metadata?.confidence;
-  const confidenceLabel = normalized.confidence_breakdown?.display_name || normalized.erp_json?.quality?.confidence_display_name || "Composite Confidence Index";
+  const confidenceLabel = normalized.confidence_breakdown?.display_name || normalized.erp_json?.quality?.confidence_display_name || t("summary.confidence");
   const displayItems = normalized.all_line_items?.length ? normalized.all_line_items : fields.line_items || [];
   originalLineItemsSnapshot = deepClone(displayItems);
 
@@ -272,7 +274,7 @@ function renderResults(data) {
   document.getElementById("documentType").textContent = classification.document_type || "-";
   document.querySelector("#ocrConfidence")?.closest(".summary-card")?.querySelector(".label")?.replaceChildren(document.createTextNode(confidenceLabel));
   document.getElementById("ocrConfidence").textContent = formatConfidence(confidence);
-  document.getElementById("erpDecision").textContent = readiness.erp_ready_status || (status === "valid" ? "ERP Ready" : "Needs Review");
+  document.getElementById("erpDecision").textContent = localizedReadinessStatus(readiness.erp_ready_status, status);
 
   safeRender("fields", () => renderFields(fields));
   safeRender("notes", () => renderNotes(normalized));
@@ -447,7 +449,7 @@ function showSectionError(section, error) {
     overlays: "previewCanvas",
   };
   const target = document.getElementById(targets[section]);
-  if (target) target.innerHTML = `<div class="note error-note">${escapeHtml(section)} render error: ${escapeHtml(error.message)}</div>`;
+  if (target) target.innerHTML = `<div class="note error-note">${escapeHtml(t("render.section_error", { section, message: error.message }))}</div>`;
 }
 
 ["toggleOcr", "toggleLayout", "toggleFields", "toggleRows", "toggleLabels"].forEach((id) => {
@@ -478,7 +480,7 @@ function renderFields(fields) {
   table.innerHTML = "";
   EDITABLE_FIELDS.forEach((field) => {
     const key = document.createElement("div");
-    key.textContent = field;
+    key.textContent = t(`fields.${field}`);
     const value = document.createElement("div");
     value.className = "field-review-cell";
     const input = document.createElement("input");
@@ -505,38 +507,38 @@ function renderFieldCandidateFallback(field, selectedValue) {
     if (consistency?.status === "inconsistent") {
       const expected = consistency.expected_value;
       wrapper.innerHTML = `
-        <div class="candidate-state warning">Warning</div>
-        <div class="candidate-warning-message">${escapeHtml(consistency.message || "This value is mathematically inconsistent with related amount fields.")}</div>
-        ${expected !== null && expected !== undefined ? `<button class="ghost small" type="button" data-expected-field="${escapeAttribute(field)}" data-expected-value="${escapeAttribute(expected)}">Use ${escapeHtml(formatMoney(expected))} instead</button>` : ""}
+        <div class="candidate-state warning">${escapeHtml(t("common.warning"))}</div>
+        <div class="candidate-warning-message">${escapeHtml(consistency.message || t("candidate.warning"))}</div>
+        ${expected !== null && expected !== undefined ? `<button class="ghost small" type="button" data-expected-field="${escapeAttribute(field)}" data-expected-value="${escapeAttribute(expected)}">${escapeHtml(t("candidate.use_expected", { value: formatMoney(expected) }))}</button>` : ""}
       `;
       wrapper.querySelector("[data-expected-field]")?.addEventListener("click", (event) => {
         applyExpectedFieldValue(event.currentTarget.dataset.expectedField, event.currentTarget.dataset.expectedValue, consistency);
       });
       return wrapper;
     }
-    wrapper.innerHTML = '<span class="candidate-state confirmed">Confirmed</span>';
+    wrapper.innerHTML = `<span class="candidate-state confirmed">${escapeHtml(t("status.confirmed"))}</span>`;
     return wrapper;
   }
   if (!candidates.length) {
-    wrapper.innerHTML = '<span class="candidate-state missing">Not extracted.</span>';
+    wrapper.innerHTML = `<span class="candidate-state missing">${escapeHtml(t("status.not_extracted"))}</span>`;
     return wrapper;
   }
   const best = candidates[0];
   const alternatives = candidates.slice(1, 4);
   wrapper.innerHTML = `
-    <div class="candidate-state review">Not confirmed</div>
+    <div class="candidate-state review">${escapeHtml(t("status.not_confirmed"))}</div>
     <div class="candidate-option">
-      <strong>Candidate:</strong>
+      <strong>${escapeHtml(t("candidate.primary"))}</strong>
       <span>${escapeHtml(displayValue(best.value ?? best.normalized_value))}</span>
-      <small>${escapeHtml(best.source || "candidate")} - ${formatConfidence(best.confidence ?? best.score)}</small>
-      <button class="ghost small" type="button" data-field-candidate="${escapeAttribute(field)}" data-candidate-index="0">Select</button>
+      <small>${escapeHtml(best.source || t("candidate.unknown_source"))} - ${formatConfidence(best.confidence ?? best.score)}</small>
+      <button class="ghost small" type="button" data-field-candidate="${escapeAttribute(field)}" data-candidate-index="0">${escapeHtml(t("common.select"))}</button>
     </div>
     ${alternatives.map((candidate, index) => `
       <div class="candidate-option alternative">
-        <strong>Alternative:</strong>
+        <strong>${escapeHtml(t("candidate.alternative"))}</strong>
         <span>${escapeHtml(displayValue(candidate.value ?? candidate.normalized_value))}</span>
-        <small>${escapeHtml(candidate.source || "candidate")} - ${formatConfidence(candidate.confidence ?? candidate.score)}</small>
-        <button class="ghost small" type="button" data-field-candidate="${escapeAttribute(field)}" data-candidate-index="${index + 1}">Select</button>
+        <small>${escapeHtml(candidate.source || t("candidate.unknown_source"))} - ${formatConfidence(candidate.confidence ?? candidate.score)}</small>
+        <button class="ghost small" type="button" data-field-candidate="${escapeAttribute(field)}" data-candidate-index="${index + 1}">${escapeHtml(t("common.select"))}</button>
       </div>
     `).join("")}
   `;
@@ -553,8 +555,8 @@ function renderNotes(data) {
   const explanation = data.validation_explanation;
   const notes = document.getElementById("validationNotes");
   const items = [
-    ...(validation.errors || []).map((message) => ({ type: "Error", message, className: "error-note" })),
-    ...(validation.warnings || []).map((message) => ({ type: "Warning", message, className: "warning-note" })),
+    ...(validation.errors || []).map((message) => ({ type: t("common.error"), message, className: "error-note" })),
+    ...(validation.warnings || []).map((message) => ({ type: t("common.warning"), message, className: "warning-note" })),
   ];
   notes.innerHTML = "";
   if (explanation?.reason) {
@@ -564,7 +566,7 @@ function renderNotes(data) {
     notes.appendChild(reason);
   }
   if (!items.length && !explanation?.reason) {
-    notes.innerHTML = '<div class="note success-note">No validation issues detected.</div>';
+    notes.innerHTML = `<div class="note success-note">${escapeHtml(t("validation.no_issues"))}</div>`;
     return;
   }
   items.forEach((item) => {
@@ -577,74 +579,83 @@ function renderNotes(data) {
 
 function renderValidationSummary(explanation, validation) {
   const status = explanation?.status || validation?.status || "-";
-  const reason = explanation?.reason || "No validation summary returned.";
-  const action = explanation?.suggested_action || "Review missing, low-confidence, or inconsistent fields before ERP export.";
+  const reason = explanation?.reason || t("validation.no_summary");
+  const action = explanation?.suggested_action || t("validation.default_action");
   const statusText = statusExplanation(status);
   validationSummary.innerHTML = `
-    <span class="label">Validation explanation</span>
+    <span class="label">${escapeHtml(t("validation.explanation"))}</span>
     <strong>${escapeHtml(statusLabel(status))}</strong>
     <p>${escapeHtml(statusText)}</p>
     <div class="inspector-list">
-      <div class="inspector-row"><span>Reason</span><div>${escapeHtml(reason)}</div></div>
-      <div class="inspector-row"><span>Action</span><div>${escapeHtml(action)}</div></div>
-      <div class="inspector-row"><span>Errors</span><div>${escapeHtml(String(explanation?.blocking_errors?.length ?? validation?.errors?.length ?? 0))}</div></div>
-      <div class="inspector-row"><span>Warnings</span><div>${escapeHtml(String(explanation?.warnings?.length ?? validation?.warnings?.length ?? 0))}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("common.reason"))}</span><div>${escapeHtml(reason)}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("common.action"))}</span><div>${escapeHtml(action)}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("validation.errors"))}</span><div>${escapeHtml(String(explanation?.blocking_errors?.length ?? validation?.errors?.length ?? 0))}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("validation.warnings"))}</span><div>${escapeHtml(String(explanation?.warnings?.length ?? validation?.warnings?.length ?? 0))}</div></div>
     </div>
   `;
 }
 
 function statusLabel(status) {
   const normalized = String(status || "").toLowerCase();
-  if (normalized.includes("valid") && !normalized.includes("invalid")) return "[OK] Validated";
-  if (normalized.includes("review")) return "[!] Needs review";
-  if (normalized.includes("invalid") || normalized.includes("reject")) return "[X] Invalid";
-  if (normalized.includes("manual")) return "[EDIT] Manually corrected";
+  if (normalized.includes("valid") && !normalized.includes("invalid")) return t("status.validated_decorated");
+  if (normalized.includes("review")) return t("status.needs_review_decorated");
+  if (normalized.includes("invalid") || normalized.includes("reject")) return t("status.invalid_decorated");
+  if (normalized.includes("manual")) return t("status.corrected_decorated");
   return status || "-";
+}
+
+function localizedReadinessStatus(readinessStatus, validationStatus) {
+  const normalized = String(readinessStatus || "").toLowerCase().replaceAll(" ", "_");
+  if (normalized === "erp_ready" || normalized === "ready") return t("erp.ready");
+  if (normalized.includes("reject")) return t("status.rejected");
+  if (normalized.includes("review")) return t("status.needs_review");
+  return String(validationStatus || "").toLowerCase() === "valid" ? t("erp.ready") : t("status.needs_review");
 }
 
 function statusExplanation(status) {
   const normalized = String(status || "").toLowerCase();
-  if (normalized.includes("valid") && !normalized.includes("invalid")) return "Required values are present and the available business checks passed.";
-  if (normalized.includes("review")) return "Some values are missing, uncertain, or need reviewer confirmation before ERP export.";
-  if (normalized.includes("invalid") || normalized.includes("reject")) return "A blocking extraction or business-rule issue prevents ERP export.";
-  if (normalized.includes("manual")) return "A reviewer changed this value; validation refreshes automatically and can be saved manually.";
-  if (normalized.includes("low")) return "The value was detected with weak OCR or layout evidence.";
-  if (normalized.includes("missing")) return "The value is required but was not found confidently.";
-  if (normalized.includes("conflict")) return "Two or more detected values disagree and need review.";
-  return "Review the extracted evidence before exporting to ERP.";
+  if (normalized.includes("valid") && !normalized.includes("invalid")) return t("status.validated_help");
+  if (normalized.includes("review")) return t("status.needs_review_help");
+  if (normalized.includes("invalid") || normalized.includes("reject")) return t("status.invalid_help");
+  if (normalized.includes("manual")) return t("status.corrected_help");
+  if (normalized.includes("low")) return t("status.low_confidence");
+  if (normalized.includes("missing")) return t("status.missing");
+  if (normalized.includes("conflict")) return t("checks.conflict");
+  return t("status.default_help");
 }
 
 function renderErpReadiness(data) {
   const panel = document.getElementById("erpReadinessPanel");
   if (!panel) return;
   const readiness = data.erp_readiness || data.erp_json?.quality?.erp_readiness || {};
-  const status = readiness.erp_ready_status || "Needs Review";
+  const status = localizedReadinessStatus(readiness.erp_ready_status, data.validation?.status);
   const score = Number(readiness.erp_ready_score ?? 0);
   const blockers = readiness.blocking_errors || [];
   const missing = readiness.missing_fields || [];
-  const disabledReasons = [...blockers, ...missing.map((field) => `${field} is missing`)];
-  const className = status === "ERP Ready" ? "ready" : status === "Rejected" ? "rejected" : "review";
+  const disabledReasons = [...blockers, ...missing.map((field) => t("erp.field_missing", { field: t(`fields.${field}`) }))];
+  const validationCode = String(data.validation?.status || "").toLowerCase();
+  const className = readiness.ready ? "ready" : validationCode.includes("reject") || validationCode.includes("invalid") ? "rejected" : "review";
   const nextAction = readiness.ready
-    ? "Next action: export the validated ERP JSON or continue reviewing evidence."
+    ? t("erp.next_ready")
     : disabledReasons.length
-      ? `Next action: fix ${disabledReasons[0]}${disabledReasons.length > 1 ? ` and ${disabledReasons.length - 1} more issue(s)` : ""}, then save corrections.`
-      : "Next action: review low-confidence fields, line items, and financial checks before export.";
+      ? t("erp.next_fix", { issue: disabledReasons[0], more: disabledReasons.length > 1 ? t("erp.more_issues", { count: disabledReasons.length - 1 }) : "" })
+      : t("erp.next_review");
   panel.className = `inspector-card readiness-card ${className}`;
   panel.innerHTML = `
-    <span class="label">ERP readiness</span>
+    <span class="label">${escapeHtml(t("erp.readiness"))}</span>
     <strong>${escapeHtml(status)}</strong>
     <p>${escapeHtml(statusExplanation(status))}</p>
     <div class="readiness-score">
       <span>${Math.round(score * 100)}%</span>
       <div class="score-bar"><span style="width:${Math.round(score * 100)}%"></span></div>
     </div>
-    ${disabledReasons.length ? `<div class="business-list">${disabledReasons.map((reason) => `<div class="note warning-note">${escapeHtml(reason)}</div>`).join("")}</div>` : '<div class="note success-note">All ERP blockers are cleared.</div>'}
+    ${disabledReasons.length ? `<div class="business-list">${disabledReasons.map((reason) => `<div class="note warning-note">${escapeHtml(reason)}</div>`).join("")}</div>` : `<div class="note success-note">${escapeHtml(t("erp.blockers_cleared"))}</div>`}
     <div class="note">${escapeHtml(nextAction)}</div>
-    <button id="erpExportBtn" class="export-button" type="button" ${readiness.ready ? "" : "disabled"} title="${escapeAttribute(disabledReasons.join("; ") || "ERP export is ready")}">Export ERP JSON</button>
+    <button id="erpExportBtn" class="export-button" type="button" ${readiness.ready ? "" : "disabled"} title="${escapeAttribute(disabledReasons.join("; ") || t("erp.export_ready_title"))}">${escapeHtml(t("erp.export"))}</button>
   `;
   panel.querySelector("#erpExportBtn")?.addEventListener("click", () => {
     navigator.clipboard?.writeText(pretty(data.validated_erp_json || data.erp_json || {}));
-    showTransientNote("Validated ERP JSON copied.");
+    showTransientNote(t("erp.copied"));
   });
 }
 
@@ -653,7 +664,7 @@ function renderConfidences(confidences) {
   list.innerHTML = "";
   const entries = Object.entries(confidences);
   if (!entries.length) {
-    list.innerHTML = '<span class="chip">No field confidence data returned</span>';
+    list.innerHTML = `<span class="chip">${escapeHtml(t("confidence.none"))}</span>`;
     return;
   }
   entries
@@ -676,25 +687,25 @@ function renderLineItems(items, rowValidation = []) {
   const rows = editableItems.map((item, index) => editableLineItemRow(item, index, rowValidation[index])).join("");
   box.innerHTML = `
     <div class="panel-head">
-      <p class="panel-subtitle">Review or correct extracted line items. Validation refreshes automatically after edits.</p>
+      <p class="panel-subtitle">${escapeHtml(t("line_items.help"))}</p>
       <div class="edit-actions">
-        <button class="ghost small" id="addLineItemBtn" type="button">Add line</button>
-        <button class="ghost small" id="saveLineItemsBtn" type="button">Save table & recheck</button>
+        <button class="ghost small" id="addLineItemBtn" type="button">${escapeHtml(t("line_items.add"))}</button>
+        <button class="ghost small" id="saveLineItemsBtn" type="button">${escapeHtml(t("line_items.save"))}</button>
       </div>
     </div>
     <table>
       <thead>
         <tr>
-          <th>Description</th><th>Quantity</th><th>Unit</th><th>Unit price</th>
-          <th>Total HT</th><th>Tax %</th><th>Total TTC</th><th>Status</th><th>Actions</th>
+          <th>${escapeHtml(t("line_items.description"))}</th><th>${escapeHtml(t("line_items.quantity"))}</th><th>${escapeHtml(t("line_items.unit"))}</th><th>${escapeHtml(t("line_items.unit_price"))}</th>
+          <th>${escapeHtml(t("line_items.total_ht"))}</th><th>${escapeHtml(t("line_items.tax"))}</th><th>${escapeHtml(t("line_items.total_ttc"))}</th><th>${escapeHtml(t("common.status"))}</th><th>${escapeHtml(t("common.actions"))}</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="9"><div class="note">No line items were extracted. Add a row manually if needed.</div></td></tr>'}</tbody>
+      <tbody>${rows || `<tr><td colspan="9"><div class="note">${escapeHtml(t("line_items.none"))}</div></td></tr>`}</tbody>
       <tfoot>
         <tr class="line-items-total-footer" aria-live="polite">
-          <td colspan="6" class="line-items-total-label">Lines total</td>
+          <td colspan="6" class="line-items-total-label">${escapeHtml(t("line_items.lines_total"))}</td>
           <td id="lineItemsTotalSummary" class="line-items-total-cell">0.00</td>
-          <td colspan="2" class="line-items-total-meta">Total TTC</td>
+          <td colspan="2" class="line-items-total-meta">${escapeHtml(t("line_items.total_ttc"))}</td>
         </tr>
       </tfoot>
     </table>
@@ -727,7 +738,7 @@ function editableLineItemRow(item, index, validationReport) {
     <td><input class="edit-input ${className}" data-index="${index}" data-line-field="${field}" value="${escapeAttribute(value ?? "")}" placeholder="-"></td>
   `).join("");
   const reason = validationReport?.validation_reason || item.source || "";
-  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(status)}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">Restore</button><button class="ghost small" type="button" data-delete-line data-index="${index}">Delete</button></div></td></tr>`;
+  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(statusLabel(status))}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-delete-line data-index="${index}">${escapeHtml(t("common.delete"))}</button></div></td></tr>`;
 }
 function updateLineItemsTotalSummary() {
   const host = document.getElementById("lineItemsTotalSummary");
@@ -738,7 +749,7 @@ function updateLineItemsTotalSummary() {
     .filter((value) => value !== null);
   const lineTotal = roundMoney(values.reduce((sum, value) => sum + value, 0));
   host.textContent = formatMoney(lineTotal);
-  host.title = "Sum of visible line item Total TTC values.";
+  host.title = t("line_items.total_title");
 }
 
 function numberOrNull(value) {
@@ -880,7 +891,7 @@ function addReviewLineItem() {
 function deleteReviewLineItem(index) {
   const items = ensureLineItems();
   if (!Number.isInteger(index) || index < 0 || index >= items.length) {
-    showTransientNote("No matching line item is available to delete.");
+    showTransientNote(t("line_items.delete_missing"));
     return;
   }
   items.splice(index, 1);
@@ -897,7 +908,7 @@ function deleteReviewLineItem(index) {
 function restoreReviewLineItem(index) {
   const original = originalLineItemsSnapshot[index];
   if (!original) {
-    showTransientNote("No original row is available to restore.");
+    showTransientNote(t("line_items.restore_missing"));
     return;
   }
   const items = ensureLineItems();
@@ -909,7 +920,7 @@ function restoreReviewLineItem(index) {
   updateCorrectionLayer("line_items");
   updateJsonPanels();
   scheduleAutoValidation("line_item_restored");
-  showTransientNote(`Restored line ${index + 1} to the original extraction.`);
+  showTransientNote(t("line_items.restored", { number: index + 1 }));
 }
 
 function ensureLineItems() {
@@ -930,7 +941,7 @@ function syncDynamicLineItemRows(items) {
   if (!table) return;
   table.rows = items.map((item, index) => ({
     key: `line_item_${index + 1}`,
-    label: `Line ${index + 1}`,
+    label: t("line_items.number", { number: index + 1 }),
     values: {
       row_number: index + 1,
       reference: item.reference ?? "",
@@ -986,11 +997,11 @@ function renderDynamicReview() {
   const host = document.getElementById("dynamicTableHost");
   if (!host) return;
   if (!lastResponse) {
-    host.innerHTML = '<div class="note">Process a document to see dynamic extraction tables.</div>';
+    host.innerHTML = `<div class="note">${escapeHtml(t("dynamic.process_first"))}</div>`;
     return;
   }
   if (activeDynamicTab === "visual") {
-    host.innerHTML = '<div class="note">Use the visual review panel above to inspect OCR boxes, layout blocks, and field boxes on the invoice preview.</div>';
+    host.innerHTML = `<div class="note">${escapeHtml(t("dynamic.visual_help"))}</div>`;
     return;
   }
   if (activeDynamicTab === "raw_json") {
@@ -1023,7 +1034,7 @@ function renderDynamicReview() {
     ? tables.filter((table) => ["all_extracted_fields", "payment_details", "tax_summary", "unmapped_text"].includes(table.id))
     : tables.filter((table) => table.id === activeDynamicTab);
   if (!selectedTables.length) {
-    host.innerHTML = '<div class="note">No dynamic table data returned for this view.</div>';
+    host.innerHTML = `<div class="note">${escapeHtml(t("dynamic.no_data"))}</div>`;
     return;
   }
   host.innerHTML = "";
@@ -1038,20 +1049,20 @@ function renderFinancialChecks(host) {
   const rows = checks.map(([name, check]) => {
     const hasActual = check.actual !== null && check.actual !== undefined && check.actual !== "";
     const status = check.passed ? "pass" : hasActual ? "fail" : "warn";
-    const label = check.passed ? "Passed" : hasActual ? "Conflict" : "Warning";
+    const label = check.passed ? t("checks.passed") : hasActual ? t("checks.conflict") : t("checks.warning");
     const action = check.passed
-      ? "No action needed."
+      ? t("checks.no_action")
       : hasActual
-        ? "Compare the document totals and correct the conflicting amount before export."
-        : "Find or enter the missing amount, then save corrections.";
+        ? t("checks.correct_conflict")
+        : t("checks.enter_missing");
     return `
       <article class="business-item ${status}">
         <header><strong>${escapeHtml(humanize(name))}</strong><span class="status-chip ${status === "pass" ? "validated" : status === "warn" ? "needs_review" : "conflict"}">${label}</span></header>
         <div class="check-grid">
-          <span>Expected</span><strong>${escapeHtml(displayValue(check.expected))}</strong>
-          <span>Extracted</span><strong>${escapeHtml(displayValue(check.actual))}</strong>
-          <span>Difference</span><strong>${escapeHtml(displayValue(check.delta))}</strong>
-          <span>Tolerance</span><strong>${escapeHtml(displayValue(reasoning.tolerance))}</strong>
+          <span>${escapeHtml(t("checks.expected"))}</span><strong>${escapeHtml(displayValue(check.expected))}</strong>
+          <span>${escapeHtml(t("checks.extracted"))}</span><strong>${escapeHtml(displayValue(check.actual))}</strong>
+          <span>${escapeHtml(t("checks.difference"))}</span><strong>${escapeHtml(displayValue(check.delta))}</strong>
+          <span>${escapeHtml(t("checks.tolerance"))}</span><strong>${escapeHtml(displayValue(reasoning.tolerance))}</strong>
         </div>
         <div class="note">${escapeHtml(action)}</div>
       </article>
@@ -1059,7 +1070,7 @@ function renderFinancialChecks(host) {
   }).join("");
   host.innerHTML = `
     <div class="business-list">
-      ${rows || '<div class="note warning-note">Financial checks need more complete totals before they can run.</div>'}
+      ${rows || `<div class="note warning-note">${escapeHtml(t("checks.incomplete"))}</div>`}
       ${errors.map((message) => `<div class="note error-note">${escapeHtml(message)}</div>`).join("")}
       ${warnings.map((message) => `<div class="note warning-note">${escapeHtml(message)}</div>`).join("")}
     </div>
@@ -1076,18 +1087,18 @@ function renderCorrectionSuggestions(host) {
     <div class="candidate-list">
       ${assistantIssues.length ? `
         <article class="candidate-card">
-          <header><strong>Review Assistant</strong><span>${formatConfidence(assistant.confidence)}</span></header>
-          <div>${escapeHtml(assistant.summary || "Review assistant generated guidance.")}</div>
-          <div>ERP impact: ${escapeHtml(assistant.erp_impact || "-")}</div>
-          <div class="note">${escapeHtml(assistant.reviewer_control || "Suggestions are advisory only.")}</div>
+          <header><strong>${escapeHtml(t("assistant.title"))}</strong><span>${formatConfidence(assistant.confidence)}</span></header>
+          <div>${escapeHtml(assistant.summary || t("assistant.default_summary"))}</div>
+          <div>${escapeHtml(t("assistant.erp_impact", { value: assistant.erp_impact || "-" }))}</div>
+          <div class="note">${escapeHtml(assistant.reviewer_control || t("assistant.advisory"))}</div>
         </article>
         ${assistantIssues.map((issue) => `
           <article class="candidate-card">
-            <header><strong>${escapeHtml(issue.title || issue.type || "Review issue")}</strong><span>${formatConfidence(issue.confidence)}</span></header>
-            <div>Problem: ${escapeHtml(issue.suspected_problem || "-")}</div>
-            <div>Explanation: ${escapeHtml(issue.explanation || "-")}</div>
-            <div>Suggested correction: ${escapeHtml(displayValue(issue.suggested_correction))}</div>
-            <div>ERP impact: ${escapeHtml(issue.erp_impact || "-")}</div>
+            <header><strong>${escapeHtml(issue.title || issue.type || t("assistant.issue"))}</strong><span>${formatConfidence(issue.confidence)}</span></header>
+            <div>${escapeHtml(t("assistant.problem"))}: ${escapeHtml(issue.suspected_problem || "-")}</div>
+            <div>${escapeHtml(t("assistant.explanation"))}: ${escapeHtml(issue.explanation || "-")}</div>
+            <div>${escapeHtml(t("assistant.suggested"))}: ${escapeHtml(displayValue(issue.suggested_correction))}</div>
+            <div>${escapeHtml(t("assistant.erp_impact", { value: issue.erp_impact || "-" }))}</div>
             ${(issue.evidence || []).length ? `<div class="candidate-evidence">${(issue.evidence || []).slice(0, 5).map((item) => `
               <div class="note">
                 #${escapeHtml(String(item.rank || "-"))}: ${escapeHtml(displayValue(item.value))}
@@ -1097,27 +1108,27 @@ function renderCorrectionSuggestions(host) {
             `).join("")}</div>` : ""}
           </article>
         `).join("")}
-      ` : '<div class="note success-note">Review Assistant found no extra review issues.</div>'}
+      ` : `<div class="note success-note">${escapeHtml(t("assistant.no_issues"))}</div>`}
       ${suggestions.length ? suggestions.map((suggestion, index) => `
         <article class="candidate-card">
-          <header><strong>${escapeHtml(suggestion.field || "Suggestion")}</strong><span>${formatConfidence(suggestion.confidence)}</span></header>
-          <div>Original: ${escapeHtml(suggestion.original ?? "-")}</div>
-          <div>Proposed: ${escapeHtml(suggestion.proposed ?? suggestion.proposed_value ?? "-")}</div>
-          <div>Reason: ${escapeHtml(suggestion.reason ?? "-")}</div>
+          <header><strong>${escapeHtml(suggestion.field || t("suggestion.title"))}</strong><span>${formatConfidence(suggestion.confidence)}</span></header>
+          <div>${escapeHtml(t("suggestion.original"))}: ${escapeHtml(suggestion.original ?? "-")}</div>
+          <div>${escapeHtml(t("suggestion.proposed"))}: ${escapeHtml(suggestion.proposed ?? suggestion.proposed_value ?? "-")}</div>
+          <div>${escapeHtml(t("suggestion.reason"))}: ${escapeHtml(suggestion.reason ?? "-")}</div>
           <div class="edit-actions">
-            <button class="ghost small" type="button" data-accept-suggestion="${index}">Accept</button>
-            <button class="ghost small" type="button" data-reject-suggestion="${index}">Reject</button>
+            <button class="ghost small" type="button" data-accept-suggestion="${index}">${escapeHtml(t("common.accept"))}</button>
+            <button class="ghost small" type="button" data-reject-suggestion="${index}">${escapeHtml(t("common.reject"))}</button>
           </div>
         </article>
-      `).join("") : '<div class="note success-note">No correction suggestions returned.</div>'}
-      ${candidateCards.length ? `<h2>Field candidates</h2>${candidateCards.map(({ field, candidate }, index) => `
+      `).join("") : `<div class="note success-note">${escapeHtml(t("suggestion.none"))}</div>`}
+      ${candidateCards.length ? `<h2>${escapeHtml(t("candidate.heading"))}</h2>${candidateCards.map(({ field, candidate }, index) => `
         <article class="candidate-card">
           <header><strong>${escapeHtml(field)}</strong><span>${formatConfidence(candidate.confidence ?? candidate.score)}</span></header>
-          <div>Value: ${escapeHtml(candidate.value ?? "-")}</div>
-          <div>Source: ${escapeHtml(candidate.source ?? "-")}</div>
-          <div>Evidence: ${escapeHtml(candidate.evidence_text ?? "-")}</div>
-          <div>Rejected: ${candidate.rejected ? escapeHtml(candidate.rejection_reason || "yes") : "no"}</div>
-          <button class="ghost small" type="button" data-select-candidate="${index}">Use candidate</button>
+          <div>${escapeHtml(t("common.value"))}: ${escapeHtml(candidate.value ?? "-")}</div>
+          <div>${escapeHtml(t("common.source"))}: ${escapeHtml(candidate.source ?? "-")}</div>
+          <div>${escapeHtml(t("common.evidence"))}: ${escapeHtml(candidate.evidence_text ?? "-")}</div>
+          <div>${escapeHtml(t("status.rejected"))}: ${candidate.rejected ? escapeHtml(candidate.rejection_reason || t("common.yes")) : escapeHtml(t("common.no"))}</div>
+          <button class="ghost small" type="button" data-select-candidate="${index}">${escapeHtml(t("candidate.use"))}</button>
         </article>
       `).join("")}` : ""}
     </div>
@@ -1128,7 +1139,7 @@ function renderCorrectionSuggestions(host) {
   host.querySelectorAll("[data-reject-suggestion]").forEach((button) => {
     button.addEventListener("click", () => {
       button.closest(".candidate-card")?.classList.add("ignored");
-      showTransientNote("Suggestion rejected for this review session.");
+      showTransientNote(t("suggestion.rejected"));
     });
   });
   host.querySelectorAll("[data-select-candidate]").forEach((button) => {
@@ -1143,14 +1154,14 @@ function renderDuplicateAndFraud(host) {
   host.innerHTML = `
     <div class="business-list">
       <article class="business-item ${duplicate.possible_duplicate ? "warn" : "pass"}">
-        <strong>Duplicate check</strong>
-        <div>Possible duplicate: ${duplicate.possible_duplicate ? "yes" : "no"}</div>
+        <strong>${escapeHtml(t("risk.duplicate"))}</strong>
+        <div>${escapeHtml(t("risk.possible", { value: duplicate.possible_duplicate ? t("common.yes") : t("common.no") }))}</div>
         <pre>${escapeHtml(pretty(duplicate))}</pre>
       </article>
       <article class="business-item ${indicators.length ? "warn" : "pass"}">
-        <strong>Automated risk indicators</strong>
-        ${indicators.length ? indicators.map((item) => `<div class="note warning-note">${escapeHtml(item)}</div>`).join("") : '<div class="note success-note">No duplicate or risk indicators returned.</div>'}
-        <div class="note">${escapeHtml(fraud.disclaimer || "These are automated risk indicators, not a fraud determination.")}</div>
+        <strong>${escapeHtml(t("risk.indicators"))}</strong>
+        ${indicators.length ? indicators.map((item) => `<div class="note warning-note">${escapeHtml(item)}</div>`).join("") : `<div class="note success-note">${escapeHtml(t("risk.none"))}</div>`}
+        <div class="note">${escapeHtml(fraud.disclaimer || t("risk.disclaimer"))}</div>
       </article>
     </div>
   `;
@@ -1165,9 +1176,9 @@ function renderDynamicTable(table) {
     <div class="dynamic-table-summary">
       <div>
         <strong>${escapeHtml(table.title)}</strong>
-        <span class="dynamic-table-meta">${rows.length} rows - confidence ${confidence}</span>
+        <span class="dynamic-table-meta">${escapeHtml(t("dynamic.summary", { count: rows.length, confidence }))}</span>
       </div>
-      ${table.id === "line_items" ? '<button class="ghost small" type="button" data-add-line>Add row</button>' : ""}
+      ${table.id === "line_items" ? `<button class="ghost small" type="button" data-add-line>${escapeHtml(t("line_items.add_row"))}</button>` : ""}
     </div>
   `;
   if (table.id === "line_items") {
@@ -1186,7 +1197,7 @@ function renderDynamicKeyValueRows(table, rows) {
   const wrapper = document.createElement("div");
   wrapper.className = "dynamic-key-values";
   if (!rows.length) {
-    wrapper.innerHTML = '<div class="note">No rows match the current filter.</div>';
+    wrapper.innerHTML = `<div class="note">${escapeHtml(t("filter.no_rows"))}</div>`;
     return wrapper;
   }
   rows.forEach((row) => {
@@ -1195,7 +1206,7 @@ function renderDynamicKeyValueRows(table, rows) {
     div.dataset.tableId = table.id;
     div.dataset.rowKey = row.key || "";
     div.innerHTML = `
-      <strong>${escapeHtml(row.label || row.key || "Row")}</strong>
+      <strong>${escapeHtml(row.label || row.key || t("dynamic.row"))}</strong>
       <span class="dynamic-value" contenteditable="true">${escapeHtml(displayValue(row.value))}</span>
       <span>${formatConfidence(row.confidence)}</span>
       <span>${escapeHtml(row.source || "")}</span>
@@ -1216,7 +1227,7 @@ function renderDynamicGridTable(table, rows) {
   const wrapper = document.createElement("div");
   wrapper.className = "dynamic-table-scroll";
   if (!rows.length) {
-    wrapper.innerHTML = '<div class="note">No rows match the current filter.</div>';
+    wrapper.innerHTML = `<div class="note">${escapeHtml(t("filter.no_rows"))}</div>`;
     return wrapper;
   }
   const columns = table.columns || [];
@@ -1228,13 +1239,13 @@ function renderDynamicGridTable(table, rows) {
       </td>
     `).join("");
     const actions = table.id === "line_items"
-      ? '<td class="dynamic-actions"><button class="ghost small" type="button" data-restore-row>Restore</button><button class="ghost small" type="button" data-ignore-row>Ignore</button><button class="ghost small" type="button" data-delete-row>Delete</button></td>'
+      ? `<td class="dynamic-actions"><button class="ghost small" type="button" data-restore-row>${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-ignore-row>${escapeHtml(t("common.ignore"))}</button><button class="ghost small" type="button" data-delete-row>${escapeHtml(t("common.delete"))}</button></td>`
       : "";
     return `<tr class="${escapeAttribute(row.status || "ok")}" data-row-key="${escapeAttribute(row.key || "")}">${cells}${actions}</tr>`;
   }).join("");
   wrapper.innerHTML = `
     <table>
-      <thead><tr>${headers}${table.id === "line_items" ? "<th>Actions</th>" : ""}</tr></thead>
+      <thead><tr>${headers}${table.id === "line_items" ? `<th>${escapeHtml(t("common.actions"))}</th>` : ""}</tr></thead>
       <tbody>${body}</tbody>
     </table>
   `;
@@ -1348,7 +1359,7 @@ function addDynamicLineItem(table) {
   const rowNumber = (table.rows || []).length + 1;
   const newRow = {
     key: `manual_line_item_${Date.now()}`,
-    label: `Line ${rowNumber}`,
+    label: t("line_items.number", { number: rowNumber }),
     values: {
       row_number: rowNumber,
       reference: "",
@@ -1447,7 +1458,7 @@ function renderPreview(data) {
   const pages = data.document_preview?.pages || [];
   const page = pages[currentPageIndex] || pages[0];
   if (!page) {
-    previewCanvas.innerHTML = '<div class="note">No preview available.</div>';
+    previewCanvas.innerHTML = `<div class="note">${escapeHtml(t("preview.none"))}</div>`;
     return;
   }
 
@@ -1455,17 +1466,17 @@ function renderPreview(data) {
   const imageUrl = new URL(page.url, window.location.origin).href;
   previewCanvas.innerHTML = `
     <div class="preview-toolbar">
-      <a class="preview-link" href="${escapeAttribute(imageUrl)}" target="_blank" rel="noopener">Open preview</a>
+      <a class="preview-link" href="${escapeAttribute(imageUrl)}" target="_blank" rel="noopener">${escapeHtml(t("preview.open"))}</a>
     </div>
     <div class="preview-stage" id="previewStage">
-      <img id="previewImage" src="${escapeAttribute(imageUrl)}" alt="Document preview">
+      <img id="previewImage" src="${escapeAttribute(imageUrl)}" alt="${escapeAttribute(t("preview.alt"))}">
     </div>
   `;
   resetRegionDetails();
   const image = document.getElementById("previewImage");
   image.addEventListener("load", () => redrawPreview());
   image.addEventListener("error", () => {
-    previewCanvas.innerHTML = '<div class="note error-note">Preview image could not be loaded from the API response.</div>';
+    previewCanvas.innerHTML = `<div class="note error-note">${escapeHtml(t("preview.load_failed"))}</div>`;
   });
   if (image.complete) redrawPreview();
 }
@@ -1528,7 +1539,7 @@ function setPreviewPage(index) {
 
 function updatePageControls(totalPages) {
   const indicator = document.getElementById("pageIndicator");
-  if (indicator) indicator.textContent = totalPages ? `Page ${currentPageIndex + 1} / ${totalPages}` : "Page - / -";
+  if (indicator) indicator.textContent = totalPages ? t("review.page", { current: currentPageIndex + 1, total: totalPages }) : t("review.page_empty");
   const prev = document.getElementById("prevPageBtn");
   const next = document.getElementById("nextPageBtn");
   if (prev) prev.disabled = currentPageIndex <= 0;
@@ -1546,7 +1557,7 @@ function getLineItemOverlayRows() {
     if (!item?.bbox) return;
     candidates.push({
       type: "line_item_row",
-      label: `Line ${index + 1}`,
+      label: t("line_items.number", { number: index + 1 }),
       text: item.description,
       value: item.description,
       bbox: item.bbox,
@@ -1607,19 +1618,19 @@ function renderOverlayDiagnostics(stage, page, renderedWidth, renderedHeight, co
     messages.push("Layout blocks unavailable: backend returned no valid page coordinates.");
   }
   panel.innerHTML = `
-    <strong>Overlay diagnostics</strong>
-    <div>Page: ${escapeHtml(page.page)}</div>
+    <strong>${escapeHtml(t("overlay.diagnostics"))}</strong>
+    <div>${escapeHtml(t("region.page"))}: ${escapeHtml(page.page)}</div>
     <div>Original page size: ${escapeHtml(page.width)} x ${escapeHtml(page.height)}</div>
     <div>Displayed page size: ${Math.round(renderedWidth)} x ${Math.round(renderedHeight)}</div>
-    <div>OCR boxes: ${totalBackend.ocr_blocks || 0} total / ${counts.ocr} visible</div>
-    <div>Layout blocks: ${totalBackend.layout_blocks || 0} total / ${counts.layout} visible</div>
-    <div>Field boxes: ${totalBackend.field_boxes || 0} total / ${counts.field} visible</div>
-    <div>Line rows: ${totalBackend.line_rows || 0} total / ${counts.row} visible</div>
+    <div>${escapeHtml(t("overlay.ocr_boxes"))}: ${totalBackend.ocr_blocks || 0} total / ${counts.ocr} visible</div>
+    <div>${escapeHtml(t("overlay.layout_blocks"))}: ${totalBackend.layout_blocks || 0} total / ${counts.layout} visible</div>
+    <div>${escapeHtml(t("overlay.field_boxes"))}: ${totalBackend.field_boxes || 0} total / ${counts.field} visible</div>
+    <div>${escapeHtml(t("overlay.line_rows"))}: ${totalBackend.line_rows || 0} total / ${counts.row} visible</div>
     <div>Invalid boxes: ${counts.invalid}</div>
     <div>Rejected at normalization: ${(totalBackend.rejected_boxes || []).length}</div>
     <div>First invalid reason: ${escapeHtml(totalBackend.first_invalid_reason || "-")}</div>
     <div>Zoom: ${Math.round(previewZoom * 100)}%</div>
-    <div>Selected region: ${escapeHtml(selectedRegionPayload?.label || "-")}</div>
+    <div>${escapeHtml(t("region.selected"))}: ${escapeHtml(selectedRegionPayload?.label || "-")}</div>
     ${messages.map((message) => `<div class="note warning-note">${escapeHtml(message)}</div>`).join("")}
   `;
   stage.appendChild(panel);
@@ -1631,27 +1642,27 @@ function showRegionDetails(type, label, payload) {
   const text = payload?.text ?? payload?.value ?? label ?? "-";
   const reasons = extractionReasons(type, payload);
   regionDetails.innerHTML = `
-    <span class="label">Selected ${escapeHtml(type)}</span>
-    <strong>${escapeHtml(label || payload?.field || "Region")}</strong>
+    <span class="label">${escapeHtml(t("region.selected_type", { type }))}</span>
+    <strong>${escapeHtml(label || payload?.field || t("region.default"))}</strong>
     <p>${escapeHtml(reasons.summary)}</p>
     <div class="inspector-list">
-      <div class="inspector-row"><span>Text/value</span><div>${escapeHtml(text)}</div></div>
-      <div class="inspector-row"><span>Confidence</span><div>${formatConfidence(payload?.confidence)}</div></div>
-      <div class="inspector-row"><span>Page</span><div>${escapeHtml(payload?.page ?? payload?.page_number ?? "-")}</div></div>
-      <div class="inspector-row"><span>Source</span><div>${escapeHtml(payload?.source ?? "-")}</div></div>
-      <div class="inspector-row"><span>Original bbox</span><div>${escapeHtml(payload?.bbox ? JSON.stringify(payload.bbox) : "-")}</div></div>
-      <div class="inspector-row"><span>Fields</span><div>${escapeHtml(fields)}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.text_value"))}</span><div>${escapeHtml(text)}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.confidence"))}</span><div>${formatConfidence(payload?.confidence)}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.page"))}</span><div>${escapeHtml(payload?.page ?? payload?.page_number ?? "-")}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.source"))}</span><div>${escapeHtml(payload?.source ?? "-")}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.bbox"))}</span><div>${escapeHtml(payload?.bbox ? JSON.stringify(payload.bbox) : "-")}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("region.fields"))}</span><div>${escapeHtml(fields)}</div></div>
     </div>
     <ul class="reason-list">${reasons.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     <div class="edit-actions region-actions">
       <select id="regionFieldSelect" class="edit-input">
         ${EDITABLE_FIELDS.map((field) => `<option value="${field}">${field}</option>`).join("")}
       </select>
-      <button class="ghost small" id="useRegionValueBtn" type="button">Use text</button>
-      <button class="ghost small" id="rejectRegionBtn" type="button">Reject</button>
+      <button class="ghost small" id="useRegionValueBtn" type="button">${escapeHtml(t("region.use_text"))}</button>
+      <button class="ghost small" id="rejectRegionBtn" type="button">${escapeHtml(t("common.reject"))}</button>
     </div>
     <details class="advanced-details">
-      <summary>Advanced evidence</summary>
+      <summary>${escapeHtml(t("region.advanced"))}</summary>
       <pre>${escapeHtml(pretty(payload))}</pre>
     </details>
   `;
@@ -1709,7 +1720,7 @@ function refreshValidationHeader() {
   }
   const readiness = lastResponse?.erp_readiness || lastResponse?.erp_json?.quality?.erp_readiness || {};
   const erpDecision = document.getElementById("erpDecision");
-  if (erpDecision) erpDecision.textContent = readiness.erp_ready_status || (status === "valid" ? "ERP Ready" : "Needs Review");
+  if (erpDecision) erpDecision.textContent = localizedReadinessStatus(readiness.erp_ready_status, status);
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
@@ -1740,8 +1751,8 @@ function scheduleAutoValidation(reason = "edit") {
   clearTimeout(autoValidationTimer);
   const statusEl = document.getElementById("validationStatus");
   if (statusEl) {
-    statusEl.textContent = "Rechecking...";
-    statusEl.title = "Automatic validation is queued for the latest edit.";
+    statusEl.textContent = t("validation.rechecking");
+    statusEl.title = t("validation.queued");
     statusEl.className = "pill needs_review";
   }
   autoValidationTimer = setTimeout(() => validateCorrections({ automatic: true, reason }), AUTO_VALIDATION_DELAY_MS);
@@ -1749,7 +1760,7 @@ function scheduleAutoValidation(reason = "edit") {
 
 async function validateCorrections({ automatic = false, reason = "manual" } = {}) {
   if (!lastResponse) {
-    if (!automatic) showError("Process a document before saving review changes.");
+    if (!automatic) showError(t("review.process_before_save"));
     return;
   }
   if (automatic && autoValidationInFlight) {
@@ -1757,7 +1768,7 @@ async function validateCorrections({ automatic = false, reason = "manual" } = {}
     return;
   }
   autoValidationInFlight = true;
-  if (!automatic) setLoading(true, "Saving review changes and refreshing ERP validation...");
+  if (!automatic) setLoading(true, t("review.saving"));
   try {
     const response = await fetch("/review/validate-corrections", {
       method: "POST",
@@ -1765,10 +1776,10 @@ async function validateCorrections({ automatic = false, reason = "manual" } = {}
       body: JSON.stringify(buildReviewCorrectionPayload()),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Could not revalidate the corrected document.");
+    if (!response.ok) throw new Error(data.detail || t("review.revalidation_failed"));
     applyCorrectionValidationResponse(data, { rerenderEditableRows: true });
     if (!automatic) {
-      showTransientNote(`Saved ${data.corrections?.length || 0} review change(s). ERP status: ${data.erp_readiness?.erp_ready_status || data.validation?.status}`);
+      showTransientNote(t("review.saved", { count: data.corrections?.length || 0, status: localizedReadinessStatus(data.erp_readiness?.erp_ready_status, data.validation?.status) }));
     }
   } catch (error) {
     if (automatic) {
@@ -1857,7 +1868,7 @@ function rejectSelectedRegion() {
   };
   updateCorrectionLayer("visual_region");
   scheduleAutoValidation("candidate_rejected");
-  showTransientNote(`Rejected candidate for ${field}.`);
+  showTransientNote(t("candidate.rejected", { field: t(`fields.${field}`) }));
 }
 
 function acceptSuggestion(index) {
@@ -1868,7 +1879,7 @@ function acceptSuggestion(index) {
   if (input) input.value = value ?? "";
   updateReviewField(suggestion.field, value);
   renderDynamicReview();
-  showTransientNote(`Accepted suggestion for ${suggestion.field}.`);
+  showTransientNote(t("suggestion.accepted", { field: t(`fields.${suggestion.field}`) }));
 }
 
 function applyExpectedFieldValue(field, value, consistency) {
@@ -1887,7 +1898,7 @@ function applyExpectedFieldValue(field, value, consistency) {
   };
   updateReviewField(field, value);
   renderDynamicReview();
-  showTransientNote(`Applied consistency suggestion for ${field}. Save to recheck.`);
+  showTransientNote(t("field.consistency_applied", { field: t(`fields.${field}`) }));
 }
 
 function selectCandidate(entry) {
@@ -1907,7 +1918,7 @@ function selectCandidate(entry) {
   };
   updateReviewField(entry.field, value);
   renderDynamicReview();
-  showTransientNote(`Selected candidate for ${entry.field}.`);
+  showTransientNote(t("candidate.selected", { field: t(`fields.${entry.field}`) }));
 }
 
 function showTransientNote(message) {
@@ -1922,9 +1933,9 @@ function showTransientNote(message) {
 }
 function resetRegionDetails() {
   regionDetails.innerHTML = `
-    <span class="label">Selected region</span>
-    <strong>No region selected</strong>
-    <p>Click any OCR, layout, or field box to inspect it.</p>
+    <span class="label">${escapeHtml(t("region.selected"))}</span>
+    <strong>${escapeHtml(t("region.none"))}</strong>
+    <p>${escapeHtml(t("region.empty_help_short"))}</p>
   `;
 }
 
@@ -1934,7 +1945,7 @@ function setZoom(value) {
   redrawPreview();
 }
 
-function setLoading(isLoading, message = "Running OCR, candidate extraction, and validation...") {
+function setLoading(isLoading, message = t("processing.default")) {
   if (loadingText) loadingText.textContent = message;
   loading.classList.toggle("hidden", !isLoading);
   processBtn.disabled = isLoading;

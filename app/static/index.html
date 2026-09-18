@@ -1,5 +1,5 @@
 ﻿<!doctype html>
-<html lang="en">
+<html lang="en" data-ui-locale="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,63 +10,63 @@
   <main class="app">
     <section class="hero">
       <div>
-        <p class="eyebrow">Smart OCR-to-ERP Platform</p>
-        <h1>Invoice review workspace</h1>
-        <p class="subtitle">Upload an invoice, review the visual evidence, correct uncertain values, and export only validated ERP JSON.</p>
+        <p class="eyebrow" data-i18n="app.product_name">Smart OCR-to-ERP Platform</p>
+        <h1 data-i18n="app.heading">Invoice review workspace</h1>
+        <p class="subtitle" data-i18n="app.subtitle">Upload an invoice, review the visual evidence, correct uncertain values, and export only validated ERP JSON.</p>
       </div>
       <div class="status-card">
-        <span class="label">API</span>
-        <strong id="apiStatus">Checking...</strong>
+        <span class="label" data-i18n="api.label">API</span>
+        <strong id="apiStatus" data-i18n="api.checking">Checking...</strong>
       </div>
     </section>
 
-    <section class="landing-summary" aria-label="Project summary">
+    <section class="landing-summary" aria-label="Project summary" data-i18n-aria-label="summary.project_aria">
       <article>
-        <span class="label">Pipeline coverage</span>
-        <strong>OCR, layout, tables, and validation</strong>
-        <p>A single workspace links document preview, evidence overlays, editable fields, product rows, financial checks, and ERP readiness.</p>
+        <span class="label" data-i18n="summary.pipeline_label">Pipeline coverage</span>
+        <strong data-i18n="summary.pipeline_title">OCR, layout, tables, and validation</strong>
+        <p data-i18n="summary.pipeline_description">A single workspace links document preview, evidence overlays, editable fields, product rows, financial checks, and ERP readiness.</p>
       </article>
       <article>
-        <span class="label">Safety rule</span>
-        <strong>Safe ERP export</strong>
-        <p>Missing, conflicting, or low-confidence values stay blocked until a reviewer confirms or corrects them.</p>
+        <span class="label" data-i18n="summary.safety_label">Safety rule</span>
+        <strong data-i18n="summary.safety_title">Safe ERP export</strong>
+        <p data-i18n="summary.safety_description">Missing, conflicting, or low-confidence values stay blocked until a reviewer confirms or corrects them.</p>
       </article>
       <article>
-        <span class="label">Benchmark note</span>
-        <strong>Confidence is evidence, not truth</strong><span class="sr-only">Confidence is not accuracy</span>
-        <p>The confidence index describes extraction evidence. Real accuracy still requires verified ground truth labels.</p>
+        <span class="label" data-i18n="summary.benchmark_label">Benchmark note</span>
+        <strong data-i18n="summary.confidence_title">Confidence is evidence, not truth</strong><span class="sr-only" data-i18n="summary.confidence_warning">Confidence is not accuracy</span>
+        <p data-i18n="summary.confidence_description">The confidence index describes extraction evidence. Real accuracy still requires verified ground truth labels.</p>
       </article>
     </section>
 
     <section class="upload-panel">
       <label class="drop-zone" id="dropZone">
         <input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp">
-        <span class="drop-title">Choose invoice or document</span>
-        <span class="drop-copy">PDF, scanned PDF, JPG, PNG, TIFF, or BMP</span>
+        <span class="drop-title" data-i18n="upload.choose">Choose invoice or document</span>
+        <span class="drop-copy" data-i18n="upload.formats">PDF, scanned PDF, JPG, PNG, TIFF, or BMP</span>
       </label>
       <div class="upload-actions">
-        <button id="processBtn" type="button">Process document</button>
-        <button id="cameraBtn" class="ghost" type="button">Capture photo</button>
+        <button id="processBtn" type="button" data-i18n="upload.process">Process document</button>
+        <button id="cameraBtn" class="ghost" type="button" data-i18n="camera.open">Capture photo</button>
       </div>
-      <div id="fileName" class="file-name">No file selected</div>
+      <div id="fileName" class="file-name" data-i18n="upload.no_file">No file selected</div>
     </section>
 
-    <section class="demo-panel" aria-label="Demo documents">
+    <section class="demo-panel" aria-label="Demo documents" data-i18n-aria-label="demo.aria">
       <div>
-        <p class="eyebrow">Demo mode</p>
-        <h2>Load a prepared document</h2>
-        <p class="panel-subtitle">These samples run through the same extraction pipeline and are useful for demos or quick regression checks.</p>
+        <p class="eyebrow" data-i18n="demo.label">Demo mode</p>
+        <h2 data-i18n="demo.title">Load a prepared document</h2>
+        <p class="panel-subtitle" data-i18n="demo.description">These samples run through the same extraction pipeline and are useful for demos or quick regression checks.</p>
       </div>
       <div class="demo-actions">
-        <button class="ghost demo-button" type="button" data-demo-id="good" aria-label="Load good invoice">Clean invoice</button>
-        <button class="ghost demo-button" type="button" data-demo-id="review" aria-label="Load review invoice">Needs-review invoice</button>
-        <button class="ghost demo-button" type="button" data-demo-id="noisy" aria-label="Load noisy document">Noisy document</button>
+        <button class="ghost demo-button" type="button" data-demo-id="good" aria-label="Load good invoice" data-i18n="demo.good" data-i18n-aria-label="demo.good_aria">Clean invoice</button>
+        <button class="ghost demo-button" type="button" data-demo-id="review" aria-label="Load review invoice" data-i18n="demo.review" data-i18n-aria-label="demo.review_aria">Needs-review invoice</button>
+        <button class="ghost demo-button" type="button" data-demo-id="noisy" aria-label="Load noisy document" data-i18n="demo.noisy" data-i18n-aria-label="demo.noisy_aria">Noisy document</button>
       </div>
     </section>
 
     <section id="loading" class="loading hidden">
       <div class="spinner"></div>
-      <span>Reading document, extracting fields, and validating ERP readiness...</span>
+      <span data-i18n="processing.initial">Reading document, extracting fields, and validating ERP readiness...</span>
     </section>
 
     <section id="errorBox" class="error hidden"></section>
@@ -74,84 +74,84 @@
     <section id="results" class="results hidden">
       <div class="summary-grid">
         <article class="summary-card">
-          <span class="label">Validation</span>
+          <span class="label" data-i18n="summary.validation">Validation</span>
           <strong id="validationStatus" class="pill">-</strong>
         </article>
         <article class="summary-card">
-          <span class="label">Document type</span>
+          <span class="label" data-i18n="summary.document_type">Document type</span>
           <strong id="documentType">-</strong>
         </article>
         <article class="summary-card">
-          <span class="label">Composite Confidence Index</span>
+          <span class="label" data-i18n="summary.confidence">Composite Confidence Index</span>
           <strong id="ocrConfidence">-</strong>
         </article>
         <article class="summary-card">
-          <span class="label">ERP readiness</span>
+          <span class="label" data-i18n="erp.readiness">ERP readiness</span>
           <strong id="erpDecision">-</strong>
         </article>
       </div>
 
-      <section class="status-guide" aria-label="Status guide">
-        <article><strong>Validated</strong><span>Required values are present and business checks pass.</span></article>
-        <article><strong>Needs review</strong><span>Some values need confirmation before ERP export.</span></article>
-        <article><strong>Invalid</strong><span>A blocking issue prevents ERP export.</span></article>
-        <article><strong>Corrected</strong><span>A reviewer changed a value; validation refreshes automatically.</span></article>
+      <section class="status-guide" aria-label="Status guide" data-i18n-aria-label="status.guide_aria">
+        <article><strong data-i18n="status.validated">Validated</strong><span data-i18n="status.validated_help">Required values are present and business checks pass.</span></article>
+        <article><strong data-i18n="status.needs_review">Needs review</strong><span data-i18n="status.needs_review_help">Some values need confirmation before ERP export.</span></article>
+        <article><strong data-i18n="status.invalid">Invalid</strong><span data-i18n="status.invalid_help">A blocking issue prevents ERP export.</span></article>
+        <article><strong data-i18n="status.corrected">Corrected</strong><span data-i18n="status.corrected_help">A reviewer changed a value; validation refreshes automatically.</span></article>
       </section>
 
       <section class="panel visual-review">
         <div class="panel-head">
-          <h2>Visual evidence review</h2>
+          <h2 data-i18n="review.visual_title">Visual evidence review</h2>
           <div class="review-actions">
-            <div class="page-controls" aria-label="Previousiew page controls">
-              <button class="ghost small" id="prevPageBtn" type="button">Previous</button>
-              <span id="pageIndicator" class="page-indicator">Page - / -</span>
-              <button class="ghost small" id="nextPageBtn" type="button">Next</button>
+            <div class="page-controls" aria-label="Preview page controls" data-i18n-aria-label="review.page_controls_aria">
+              <button class="ghost small" id="prevPageBtn" type="button" data-i18n="common.previous">Previous</button>
+              <span id="pageIndicator" class="page-indicator" data-i18n="review.page_empty">Page - / -</span>
+              <button class="ghost small" id="nextPageBtn" type="button" data-i18n="common.next">Next</button>
             </div>
-            <div class="zoom-controls" aria-label="Previousiew zoom controls">
+            <div class="zoom-controls" aria-label="Preview zoom controls" data-i18n-aria-label="review.zoom_controls_aria">
               <button class="ghost small" id="zoomOutBtn" type="button">-</button>
               <button class="ghost small" id="zoomInBtn" type="button">+</button>
               <button class="ghost small" id="resetZoomBtn" type="button">100%</button>
-              <button class="ghost small" id="fitWidthBtn" type="button">Fit width</button>
+              <button class="ghost small" id="fitWidthBtn" type="button" data-i18n="review.fit_width">Fit width</button>
             </div>
             <div class="toggles">
-              <label><input type="checkbox" id="toggleOcr" checked> OCR boxes</label>
-              <label><input type="checkbox" id="toggleLayout" checked> Layout blocks</label>
-              <label><input type="checkbox" id="toggleFields" checked> Field boxes</label>
-              <label><input type="checkbox" id="toggleRows" checked> Line rows</label>
-              <label><input type="checkbox" id="toggleLabels" checked> Confidence labels</label>
+              <label><input type="checkbox" id="toggleOcr" checked> <span data-i18n="overlay.ocr_boxes">OCR boxes</span></label>
+              <label><input type="checkbox" id="toggleLayout" checked> <span data-i18n="overlay.layout_blocks">Layout blocks</span></label>
+              <label><input type="checkbox" id="toggleFields" checked> <span data-i18n="overlay.field_boxes">Field boxes</span></label>
+              <label><input type="checkbox" id="toggleRows" checked> <span data-i18n="overlay.line_rows">Line rows</span></label>
+              <label><input type="checkbox" id="toggleLabels" checked> <span data-i18n="overlay.confidence_labels">Confidence labels</span></label>
             </div>
           </div>
         </div>
         <div class="review-grid">
           <div id="previewCanvas" class="preview-canvas">
-            <div class="note">Upload a document to view the page preview and evidence overlays.</div>
+            <div class="note" data-i18n="review.preview_empty">Upload a document to view the page preview and evidence overlays.</div>
           </div>
           <aside class="review-sidebar">
             <section id="validationSummary" class="inspector-card">
-              <span class="label">Validation summary</span>
-              <strong>Waiting for document</strong>
-              <p>Process a document to see what passed, what failed, and what needs review.</p>
+              <span class="label" data-i18n="validation.summary">Validation summary</span>
+              <strong data-i18n="validation.waiting">Waiting for document</strong>
+              <p data-i18n="validation.empty_help">Process a document to see what passed, what failed, and what needs review.</p>
             </section>
             <section id="regionDetails" class="inspector-card region-details">
-              <span class="label">Selected region</span>
-              <strong>No region selected</strong>
-              <p>Click any OCR, layout, field, or row box to inspect the evidence.</p>
+              <span class="label" data-i18n="region.selected">Selected region</span>
+              <strong data-i18n="region.none">No region selected</strong>
+              <p data-i18n="region.empty_help">Click any OCR, layout, field, or row box to inspect the evidence.</p>
             </section>
             <section id="erpReadinessPanel" class="inspector-card readiness-card">
-              <span class="label">ERP readiness</span>
-              <strong>Waiting for document</strong>
-              <p>Process a document to see whether ERP export is allowed.</p>
-              <button id="erpExportBtn" class="export-button" type="button" disabled>Export validated ERP JSON</button>
+              <span class="label" data-i18n="erp.readiness">ERP readiness</span>
+              <strong data-i18n="validation.waiting">Waiting for document</strong>
+              <p data-i18n="erp.empty_help">Process a document to see whether ERP export is allowed.</p>
+              <button id="erpExportBtn" class="export-button" type="button" disabled data-i18n="erp.export_validated">Export validated ERP JSON</button>
             </section>
             <section class="inspector-card">
-              <span class="label">Overlay legend</span>
+              <span class="label" data-i18n="overlay.legend">Overlay legend</span>
               <div class="legend">
-                <span><i class="legend-supplier"></i>Supplier</span>
-                <span><i class="legend-customer"></i>Customer</span>
-                <span><i class="legend-products"></i>Products</span>
-                <span><i class="legend-totals"></i>Totals</span>
-                <span><i class="legend-row"></i>Line row</span>
-                <span><i class="legend-field"></i>Field</span>
+                <span><i class="legend-supplier"></i><span data-i18n="party.supplier">Supplier</span></span>
+                <span><i class="legend-customer"></i><span data-i18n="party.customer">Customer</span></span>
+                <span><i class="legend-products"></i><span data-i18n="overlay.products">Products</span></span>
+                <span><i class="legend-totals"></i><span data-i18n="overlay.totals">Totals</span></span>
+                <span><i class="legend-row"></i><span data-i18n="overlay.line_row">Line row</span></span>
+                <span><i class="legend-field"></i><span data-i18n="overlay.field">Field</span></span>
                 <span><i class="legend-ocr"></i>OCR</span>
               </div>
             </section>
@@ -162,38 +162,34 @@
       <section class="panel dynamic-review">
         <div class="panel-head">
           <div>
-            <h2>Structured data review</h2>
-            <p class="panel-subtitle">Review every extracted value separately from the final ERP export decision.</p>
+            <h2 data-i18n="review.structured_title">Structured data review</h2>
+            <p class="panel-subtitle" data-i18n="review.structured_help">Review every extracted value separately from the final ERP export decision.</p>
           </div>
           <div class="filter-bar">
-            <label for="dynamicFilter">Filter</label>
+            <label for="dynamicFilter" data-i18n="filter.label">Filter</label>
             <select id="dynamicFilter">
-              <option value="all">All</option>
-              <option value="erp">ERP only</option>
-              <option value="validated">Validated</option>
-              <option value="needs_review">Needs review</option>
-              <option value="missing">Missing</option>
-              <option value="low_confidence">Low confidence</option>
-              <option value="unmapped">Unmapped</option>
-              <option value="manually_corrected">Manually corrected</option>
+              <option value="all" data-i18n="filter.all">All</option><option value="erp" data-i18n="filter.erp_only">ERP only</option>
+              <option value="validated" data-i18n="filter.validated">Validated</option><option value="needs_review" data-i18n="filter.needs_review">Needs review</option>
+              <option value="missing" data-i18n="filter.missing">Missing</option><option value="low_confidence" data-i18n="filter.low_confidence">Low confidence</option>
+              <option value="unmapped" data-i18n="filter.unmapped">Unmapped</option><option value="manually_corrected" data-i18n="filter.corrected">Manually corrected</option>
             </select>
           </div>
         </div>
         <div class="dynamic-tabs">
-          <button class="dynamic-tab active" type="button" data-dynamic-tab="visual">Visual Review</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_fields">ERP Fields</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="all_extracted_fields">All Extracted Values</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="line_items">Line Items</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="financial_checks">Financial Validation</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="correction_suggestions">Review Suggestions</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="duplicate_fraud">Duplicate & Risk</button>
-          <span class="advanced-label">Diagnostics</span><span class="sr-only">Advanced</span>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="ocr_blocks">OCR Blocks</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="layout_blocks">Layout Blocks</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="unmapped_text">Unmapped Text</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="validation_report">Validation Report</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_json">ERP JSON</button>
-          <button class="dynamic-tab" type="button" data-dynamic-tab="raw_json">Full JSON</button>
+          <button class="dynamic-tab active" type="button" data-dynamic-tab="visual" data-i18n="tabs.visual">Visual Review</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_fields" data-i18n="tabs.erp_fields">ERP Fields</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="all_extracted_fields" data-i18n="tabs.all_values">All Extracted Values</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="line_items" data-i18n="tabs.line_items">Line Items</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="financial_checks" data-i18n="tabs.financial">Financial Validation</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="correction_suggestions" data-i18n="tabs.suggestions">Review Suggestions</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="duplicate_fraud" data-i18n="tabs.risk">Duplicate & Risk</button>
+          <span class="advanced-label" data-i18n="tabs.diagnostics">Diagnostics</span><span class="sr-only" data-i18n="tabs.advanced">Advanced</span>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="ocr_blocks" data-i18n="tabs.ocr_blocks">OCR Blocks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="layout_blocks" data-i18n="tabs.layout_blocks">Layout Blocks</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="unmapped_text" data-i18n="tabs.unmapped">Unmapped Text</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="validation_report" data-i18n="tabs.validation_report">Validation Report</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="erp_json" data-i18n="tabs.erp_json">ERP JSON</button>
+          <button class="dynamic-tab" type="button" data-dynamic-tab="raw_json" data-i18n="tabs.full_json">Full JSON</button>
         </div>
         <div id="dynamicTableHost" class="dynamic-table-host"></div>
       </section>
@@ -201,10 +197,10 @@
       <div class="content-grid">
         <section class="panel">
           <div class="panel-head">
-            <h2>Editable fields</h2>
+            <h2 data-i18n="fields.editable_title">Editable fields</h2>
             <div class="edit-actions">
-              <button class="ghost" data-copy="fieldsTable">Copy</button>
-              <button id="saveCorrectionsBtn" class="ghost" type="button">Save & recheck</button>
+              <button class="ghost" data-copy="fieldsTable" data-i18n="common.copy">Copy</button>
+              <button id="saveCorrectionsBtn" class="ghost" type="button" data-i18n="review.save_recheck">Save & recheck</button>
             </div>
           </div>
           <div id="fieldsTable" class="field-table"></div>
@@ -212,7 +208,7 @@
 
         <section class="panel">
           <div class="panel-head">
-            <h2>Validation issues</h2>
+            <h2 data-i18n="validation.issues">Validation issues</h2>
           </div>
           <div id="validationNotes" class="notes"></div>
         </section>
@@ -220,14 +216,14 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Editable line items</h2>
+          <h2 data-i18n="line_items.editable_title">Editable line items</h2>
         </div>
         <div id="lineItems" class="line-items"></div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Field confidence</h2>
+          <h2 data-i18n="confidence.field_title">Field confidence</h2>
         </div>
         <div id="confidenceList" class="chips"></div>
       </section>
@@ -235,9 +231,9 @@
       <section class="tabs">
         <div class="tab-buttons">
           <button class="tab active" data-tab="erpJson">ERP JSON</button>
-          <button class="tab" data-tab="ocrText">OCR text</button>
-          <button class="tab" data-tab="debugJson">Candidate debug</button>
-          <button class="tab" data-tab="fullJson">API response</button>
+          <button class="tab" data-tab="ocrText" data-i18n="tabs.ocr_text">OCR text</button>
+          <button class="tab" data-tab="debugJson" data-i18n="tabs.candidate_debug">Candidate debug</button>
+          <button class="tab" data-tab="fullJson" data-i18n="tabs.api_response">API response</button>
         </div>
         <pre id="erpJson" class="tab-panel"></pre>
         <pre id="ocrText" class="tab-panel hidden"></pre>
@@ -246,23 +242,24 @@
       </section>
     </section>
   </main>
-    <section id="cameraModal" class="camera-modal hidden" aria-label="Camera capture dialog">
+    <section id="cameraModal" class="camera-modal hidden" aria-label="Camera capture dialog" data-i18n-aria-label="camera.dialog_aria">
       <div class="camera-card">
         <div class="panel-head">
           <div>
-            <h2>Capture document</h2>
-            <p class="panel-subtitle">Take a photo and process it through the same review workflow.</p>
+            <h2 data-i18n="camera.title">Capture document</h2>
+            <p class="panel-subtitle" data-i18n="camera.description">Take a photo and process it through the same review workflow.</p>
           </div>
-          <button id="closeCameraBtn" class="ghost small" type="button">Close</button>
+          <button id="closeCameraBtn" class="ghost small" type="button" data-i18n="camera.close">Close</button>
         </div>
         <video id="cameraVideo" autoplay playsinline></video>
         <canvas id="cameraCanvas" class="hidden"></canvas>
         <div class="camera-actions">
-          <button id="captureCameraBtn" type="button">Take picture</button>
+          <button id="captureCameraBtn" type="button" data-i18n="camera.capture">Take picture</button>
         </div>
       </div>
     </section>
-  <script src="/static/app.js?v=line-total-footer-20260729"></script>
+  <script src="/static/strings.js?v=ui-localization-1"></script>
+  <script src="/static/app.js?v=ui-localization-1"></script>
 </body>
 </html>
 
