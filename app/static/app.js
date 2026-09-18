@@ -1325,7 +1325,7 @@ function markCorrected(row, correctedValue, tableId, element) {
     if (fieldInput) fieldInput.value = correctedValue;
   }
   element.classList.add("manually_corrected");
-  element.querySelector(".status-chip").textContent = "manually_corrected";
+  element.querySelector(".status-chip").textContent = statusLabel("manually_corrected");
   element.querySelector(".status-chip").className = "status-chip manually_corrected";
   updateCorrectionLayer(tableId);
   updateJsonPanels();
