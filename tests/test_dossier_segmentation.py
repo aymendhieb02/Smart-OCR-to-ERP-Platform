@@ -45,6 +45,28 @@ def test_unknown_page_is_not_forced_into_known_family():
     assert result.match_score == 0
 
 
+def test_customs_layout_evidence_overrides_incidental_supplier_family_text():
+    result = classify_page([
+        _line("SOTACIB KAIROUAN", 3),
+        _line("Exportateur", 3),
+        _line("Importateur", 3),
+        _line("Moyen de transport", 3),
+    ], 3)
+
+    assert result.document_type == "customs_declaration"
+    assert result.document_family is None
+
+
+def test_customs_masthead_overrides_supplier_name_on_same_page():
+    result = classify_page([
+        _line("TUNISI TRADENT", 3),
+        _line("SOTACIB KASSERINE CIMENT BLANC", 3),
+    ], 3)
+
+    assert result.document_type == "customs_declaration"
+    assert result.document_family == "customs_tradenet_v1"
+
+
 def test_classify_pages_includes_page_without_ocr_lines():
     result = classify_pages(OCRResult(
         raw_text="Invoice",

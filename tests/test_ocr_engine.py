@@ -66,6 +66,20 @@ def test_paddle_empty_pages_do_not_crash(monkeypatch):
     assert ocr == []
 
 
+def test_model_initialization_failure_degrades_without_crashing(monkeypatch):
+    def fail_initialization():
+        raise RuntimeError("model initialization failed")
+
+    monkeypatch.setattr("app.services.ocr_engine._get_paddle_instance", fail_initialization)
+    monkeypatch.setattr(settings, "enable_tesseract_fallback", False)
+
+    result = OCREngine(use_disk_cache=False).run([np.zeros((30, 30, 3), dtype=np.uint8)])
+
+    assert result.engine == "EmbeddedText"
+    assert result.lines == []
+    assert result.raw_text == ""
+
+
 def test_gray_image_is_converted_to_three_channels():
     gray = np.zeros((10, 12), dtype=np.uint8)
     color = _ensure_color_image(gray)

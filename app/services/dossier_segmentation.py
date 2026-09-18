@@ -36,11 +36,12 @@ class _FamilyRule:
 
 _FAMILY_RULES = (
     _FamilyRule("customs_tradenet_v1", "customs_declaration", (
-        ("tradenet", 2.0), ("liasse unique", 0.7),
+        ("tradenet", 2.0), ("tradent", 1.5), ("liasse unique", 0.7),
         ("declaration en detail", 0.6), ("تصريح", 0.4),
     )),
     _FamilyRule("customs_douanes_tunisiennes_v1", "customs_declaration", (
         ("douanes tunisiennes", 2.0), ("الديوانة التونسية", 2.0),
+        ("douanes tunisennes", 1.5),
         ("declaration en detail", 0.8), ("bureau des douanes", 0.5),
     )),
     _FamilyRule("ciments_enfidha_invoice_v1", "commercial_invoice", (
@@ -66,6 +67,10 @@ _GENERIC_CUSTOMS_ANCHORS = (
     "douane", "customs", "declaration en detail", "تصريح", "الديوانة",
 )
 _GENERIC_INVOICE_ANCHORS = ("facture", "invoice", "فاتورة")
+_CUSTOMS_LAYOUT_ANCHORS = (
+    "exportateur", "importateur", "declarant", "designation des marchandises",
+    "moyen de transport", "bureau", "pays de provenance", "pays de destination",
+)
 
 
 def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
@@ -78,7 +83,31 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         score = sum(weight for anchor, weight in rule.anchors if _matching_text(anchor) in match_text)
         ranked.append((score, -priority, rule, matches))
 
+    customs_score, _customs_priority, customs_winner, customs_matches = max(
+        (item for item in ranked if item[2].document_type == "customs_declaration"),
+        key=lambda item: (item[0], item[1]),
+    )
+    if customs_score >= 1.0:
+        return PageClassification(
+            page_number=page_number,
+            document_type=customs_winner.document_type,
+            document_family=customs_winner.family,
+            match_score=round(min(1.0, customs_score / 2.5), 3),
+            matched_anchors=customs_matches,
+            reasons=(f"matched deterministic anchors for {customs_winner.family}",),
+        )
+
     score, _priority, winner, matches = max(ranked, key=lambda item: (item[0], item[1]))
+    customs_layout_matches = tuple(anchor for anchor in _CUSTOMS_LAYOUT_ANCHORS if anchor in match_text)
+    if winner.document_type == "commercial_invoice" and len(customs_layout_matches) >= 3:
+        return PageClassification(
+            page_number=page_number,
+            document_type="customs_declaration",
+            document_family=None,
+            match_score=round(min(0.49, 0.2 + len(customs_layout_matches) * 0.05), 3),
+            matched_anchors=customs_layout_matches,
+            reasons=("multiple customs-form layout anchors override incidental invoice-family text",),
+        )
     if score >= 1.0:
         return PageClassification(
             page_number=page_number,
