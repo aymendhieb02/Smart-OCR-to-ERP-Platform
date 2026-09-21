@@ -76,3 +76,8 @@ def test_business_logic_does_not_depend_on_translated_document_labels():
     assert 'document.document_type' in APP_JS
     assert 'if ("Facture' not in APP_JS
     assert '=== "Déclaration douanière"' not in APP_JS
+
+
+def test_display_only_fields_are_deduplicated_and_have_safe_labels():
+    assert "const values = new Map(Object.entries(fields))" in APP_JS
+    assert 'translated.startsWith("[missing:") ? humanize(key) : translated' in APP_JS

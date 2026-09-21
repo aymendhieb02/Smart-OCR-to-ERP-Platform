@@ -685,10 +685,17 @@ function renderFields(fields) {
 }
 
 function renderAvailableStructuredValues(fields = {}, expandedFields = {}) {
-  const entries = [...Object.entries(fields), ...Object.entries(expandedFields).map(([key, detail]) => [key, detail?.value])]
-    .filter(([, value]) => value !== null && value !== undefined && value !== "" && !Array.isArray(value));
+  const values = new Map(Object.entries(fields));
+  Object.entries(expandedFields).forEach(([key, detail]) => {
+    if (!values.has(key) || values.get(key) === null || values.get(key) === "") values.set(key, detail?.value);
+  });
+  const entries = [...values.entries()].filter(([, value]) => value !== null && value !== undefined && value !== "" && !Array.isArray(value));
   if (!entries.length) return `<div class="note">${escapeHtml(t("dossier.information_unavailable"))}</div>`;
-  return `<div class="readonly-fields">${entries.map(([key, value]) => `<div><strong>${escapeHtml(t(`fields.${key}`))}</strong><span>${escapeHtml(displayValue(value))}</span></div>`).join("")}</div>`;
+  return `<div class="readonly-fields">${entries.map(([key, value]) => {
+    const translated = t(`fields.${key}`);
+    const label = translated.startsWith("[missing:") ? humanize(key) : translated;
+    return `<div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(displayValue(value))}</span></div>`;
+  }).join("")}</div>`;
 }
 
 function renderFieldCandidateFallback(field, selectedValue) {
