@@ -19,6 +19,9 @@ const { t } = window.AppI18n;
 // Compatibility marker for the legacy static test: English key value "Advanced evidence" now lives in strings.js.
 
 let selectedFile = null;
+let dossierResponse = null;
+let selectedLogicalDocumentIndex = 0;
+let selectedPageWithinLogicalDocument = 0;
 let lastResponse = null;
 let previewZoom = 1;
 let fitWidth = true;
@@ -36,6 +39,18 @@ let autoValidationInFlight = false;
 let autoValidationQueued = false;
 const AUTO_VALIDATION_DELAY_MS = 800;
 const MATH_CONSISTENCY_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate"]);
+
+const INVOICE_FIELD_GROUPS = [
+  "invoice_number", "invoice_date", "supplier_name", "supplier_address", "supplier_tax_id",
+  "customer_name", "customer_address", "customer_tax_id", "currency", "amount_ht",
+  "tva_amount", "amount_ttc", "tax_rate", "purchase_order_number",
+];
+const DOCUMENT_PRESENTATION = Object.freeze({
+  ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
+  commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
+  customs_declaration: { labelKey: "dossier.document_customs", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
+  unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
+});
 
 const EDITABLE_FIELDS = [
   "supplier_name",
@@ -172,7 +187,7 @@ async function processUploadedFile() {
   results.classList.add("hidden");
 
   try {
-    const response = await fetch("/process-invoice", {
+    const response = await fetch("/process-dossier", {
       method: "POST",
       body: formData,
     });
@@ -248,15 +263,31 @@ async function checkApi() {
 
 function renderResults(data) {
   resetCorrections();
-  const normalized = normalizeReviewResponse(data);
+  dossierResponse = normalizeDossierResponse(data);
+  selectedLogicalDocumentIndex = 0;
+  selectedPageWithinLogicalDocument = 0;
+  renderDossierNavigation();
+  renderDossierRelationships();
+  renderSelectedLogicalDocument(data);
+}
+
+function renderSelectedLogicalDocument(rawResponse = dossierResponse) {
+  const logicalDocument = getSelectedLogicalDocument();
+  if (!logicalDocument) return;
+  resetCorrections();
+  const normalized = normalizeReviewResponse(logicalDocument.response);
+  normalized.document_preview = { source_file: dossierResponse.source_file, pages: getSelectedDocumentPreviewPages() };
   lastResponse = normalized;
   window.__REVIEW_DEBUG__ = {
-    rawResponse: data,
+    rawResponse,
+    dossierResponse,
+    selectedLogicalDocumentIndex,
+    selectedPageWithinLogicalDocument,
     normalizedResponse: normalized,
     overlayCounts: normalized.overlay_counts,
     renderErrors: [],
   };
-  currentPageIndex = 0;
+  currentPageIndex = selectedPageWithinLogicalDocument;
   const validation = normalized.validation || {};
   const status = validation.status || (validation.is_valid ? "valid" : "invalid");
   const classification = normalized.document_classification || {};
@@ -291,6 +322,159 @@ function renderResults(data) {
   results.classList.remove("hidden");
   safeRender("overlays", () => renderPreview(normalized));
   document.querySelector(".visual-review")?.scrollIntoView({ block: "start" });
+}
+
+function normalizeDossierResponse(response) {
+  if (Array.isArray(response?.logical_documents)) {
+    return {
+      ...response,
+      document_count: response.document_count ?? response.logical_documents.length,
+      document_preview: response.document_preview || { source_file: response.source_file, pages: [] },
+    };
+  }
+  const sourceFile = response?.erp_json?.metadata?.source_file || response?.document_preview?.source_file || "document";
+  const pages = response?.document_preview?.pages || [];
+  return {
+    dossier_id: `single:${sourceFile}`,
+    source_file: sourceFile,
+    page_count: pages.length || 1,
+    document_count: 1,
+    summary: summarizeLogicalDocuments([{ response }]),
+    document_preview: response?.document_preview || { source_file: sourceFile, pages: [] },
+    page_classifications: [],
+    logical_documents: [{
+      logical_document_id: `single:${sourceFile}:logical_document_1`,
+      document_index: 1,
+      document_type: response?.document_classification?.document_type || "unknown",
+      document_family: null,
+      physical_page_numbers: pages.map((page) => normalizePage(page.page)),
+      page_classifications: [],
+      response,
+    }],
+  };
+}
+
+function getSelectedLogicalDocument() {
+  return dossierResponse?.logical_documents?.[selectedLogicalDocumentIndex] || null;
+}
+
+function getSelectedDocumentResponse() {
+  return getSelectedLogicalDocument()?.response || null;
+}
+
+function getSelectedDocumentPreviewPages() {
+  const document = getSelectedLogicalDocument();
+  const physicalPages = new Set(document?.physical_page_numbers || []);
+  return (dossierResponse?.document_preview?.pages || []).filter((page) => physicalPages.has(normalizePage(page.page)));
+}
+
+function getSelectedPreviewPage() {
+  return getSelectedDocumentPreviewPages()[selectedPageWithinLogicalDocument] || null;
+}
+
+function getSelectedPhysicalPageNumber() {
+  return getSelectedPreviewPage()?.page ?? getSelectedLogicalDocument()?.physical_page_numbers?.[selectedPageWithinLogicalDocument] ?? null;
+}
+
+function getSelectedPageScopedOverlays() {
+  const page = getSelectedPhysicalPageNumber();
+  const response = lastResponse || getSelectedDocumentResponse() || {};
+  const onPage = (item) => normalizePage(item.page ?? item.page_number) === normalizePage(page);
+  return {
+    ocr_blocks: (response.ocr_blocks || []).filter(onPage),
+    layout_blocks: (response.layout_blocks || []).filter(onPage),
+    field_boxes: (response.field_boxes || []).filter(onPage),
+    line_rows: getLineItemOverlayRows().filter(onPage),
+  };
+}
+
+function resolveDocumentPresentation(document = getSelectedLogicalDocument()) {
+  const key = document?.document_family && DOCUMENT_PRESENTATION[document.document_family]
+    ? document.document_family
+    : document?.document_type && DOCUMENT_PRESENTATION[document.document_type]
+      ? document.document_type
+      : "unknown";
+  return { key, ...DOCUMENT_PRESENTATION[key] };
+}
+
+function summarizeLogicalDocuments(documents = dossierResponse?.logical_documents || []) {
+  const statuses = documents.map((item) => String(item.response?.validation?.status || "needs_review").toLowerCase());
+  const valid_count = statuses.filter((status) => status === "valid").length;
+  const invalid_count = statuses.filter((status) => status.includes("invalid") || status.includes("reject")).length;
+  const needs_review_count = statuses.length - valid_count - invalid_count;
+  return { status: invalid_count ? "invalid" : needs_review_count ? "needs_review" : "valid", valid_count, needs_review_count, invalid_count };
+}
+
+function renderDossierNavigation() {
+  if (!dossierResponse) return;
+  const title = document.getElementById("dossierTitle");
+  const counts = document.getElementById("dossierCounts");
+  const summaryHost = document.getElementById("dossierSummary");
+  const tabs = document.getElementById("logicalDocumentTabs");
+  const summary = dossierResponse.summary || summarizeLogicalDocuments();
+  if (title) title.textContent = dossierResponse.source_file || t("dossier.label");
+  if (counts) counts.textContent = t("dossier.counts", { documents: dossierResponse.document_count || 0, pages: dossierResponse.page_count || 0 });
+  if (summaryHost) summaryHost.textContent = t("dossier.summary", {
+    status: statusLabel(summary.status), valid: summary.valid_count || 0,
+    review: summary.needs_review_count || 0, invalid: summary.invalid_count || 0,
+  });
+  if (!tabs) return;
+  tabs.innerHTML = "";
+  (dossierResponse.logical_documents || []).forEach((logicalDocument, index) => {
+    const presentation = resolveDocumentPresentation(logicalDocument);
+    const response = logicalDocument.response || {};
+    const fields = response.detected_fields || {};
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `logical-document-tab${index === selectedLogicalDocumentIndex ? " active" : ""}`;
+    button.id = `logical-document-tab-${index}`;
+    button.dataset.logicalDocumentIndex = String(index);
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(index === selectedLogicalDocumentIndex));
+    button.setAttribute("aria-controls", "logicalDocumentPanel");
+    button.tabIndex = index === selectedLogicalDocumentIndex ? 0 : -1;
+    const identity = fields.invoice_number || response.expanded_fields?.declaration_reference?.value || "";
+    const date = fields.invoice_date || "";
+    button.innerHTML = `<strong>${escapeHtml(t(presentation.labelKey))}</strong>${identity ? `<span>${escapeHtml(identity)}</span>` : ""}${date ? `<span>${escapeHtml(date)}</span>` : ""}<small>${escapeHtml(statusLabel(response.validation?.status))}</small>`;
+    button.addEventListener("click", () => selectLogicalDocument(index));
+    button.addEventListener("keydown", (event) => handleDocumentTabKeydown(event, index));
+    tabs.appendChild(button);
+  });
+}
+
+function handleDocumentTabKeydown(event, index) {
+  const total = dossierResponse?.logical_documents?.length || 0;
+  if (!total || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? total - 1 : event.key === "ArrowRight" ? (index + 1) % total : (index - 1 + total) % total;
+  selectLogicalDocument(next);
+  document.getElementById(`logical-document-tab-${next}`)?.focus();
+}
+
+function selectLogicalDocument(index) {
+  if (!dossierResponse?.logical_documents?.[index]) return;
+  selectedLogicalDocumentIndex = index;
+  selectedPageWithinLogicalDocument = 0;
+  currentPageIndex = 0;
+  renderDossierNavigation();
+  renderDossierRelationships();
+  renderSelectedLogicalDocument();
+}
+
+function structuredFieldValue(document, field) {
+  return document?.response?.detected_fields?.[field] ?? document?.response?.expanded_fields?.[field]?.value ?? null;
+}
+
+function renderDossierRelationships() {
+  const host = document.getElementById("dossierRelationships");
+  if (!host || !dossierResponse) return;
+  const producer = dossierResponse.logical_documents?.find((item) => item.document_type === "commercial_invoice" && item.document_family !== "ruspina_reinvoice_v1");
+  const reinvoice = dossierResponse.logical_documents?.find((item) => item.document_family === "ruspina_reinvoice_v1");
+  const producerNumber = structuredFieldValue(producer, "invoice_number");
+  const referencedInvoice = structuredFieldValue(reinvoice, "referenced_invoice");
+  let relationship = t("dossier.relationship_unavailable");
+  if (producerNumber && referencedInvoice) relationship = producerNumber === referencedInvoice ? t("dossier.relationship_match") : t("dossier.relationship_differs");
+  host.innerHTML = `<strong>${escapeHtml(t("dossier.relationships"))}</strong><span>${escapeHtml(relationship)}</span>`;
 }
 
 function normalizeReviewResponse(response) {
@@ -478,7 +662,12 @@ window.addEventListener("resize", () => {
 function renderFields(fields) {
   const table = document.getElementById("fieldsTable");
   table.innerHTML = "";
-  EDITABLE_FIELDS.forEach((field) => {
+  const presentation = resolveDocumentPresentation();
+  if (!presentation.allowCorrections) {
+    table.innerHTML = `<div class="note warning-note">${escapeHtml(t("dossier.correction_unavailable"))}</div>${renderAvailableStructuredValues(fields, lastResponse?.expanded_fields)}`;
+    return;
+  }
+  EDITABLE_FIELDS.filter((field) => presentation.fields.includes(field)).forEach((field) => {
     const key = document.createElement("div");
     key.textContent = t(`fields.${field}`);
     const value = document.createElement("div");
@@ -493,6 +682,20 @@ function renderFields(fields) {
     value.appendChild(renderFieldCandidateFallback(field, fields[field]));
     table.append(key, value);
   });
+}
+
+function renderAvailableStructuredValues(fields = {}, expandedFields = {}) {
+  const values = new Map(Object.entries(fields));
+  Object.entries(expandedFields).forEach(([key, detail]) => {
+    if (!values.has(key) || values.get(key) === null || values.get(key) === "") values.set(key, detail?.value);
+  });
+  const entries = [...values.entries()].filter(([, value]) => value !== null && value !== undefined && value !== "" && !Array.isArray(value));
+  if (!entries.length) return `<div class="note">${escapeHtml(t("dossier.information_unavailable"))}</div>`;
+  return `<div class="readonly-fields">${entries.map(([key, value]) => {
+    const translated = t(`fields.${key}`);
+    const label = translated.startsWith("[missing:") ? humanize(key) : translated;
+    return `<div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(displayValue(value))}</span></div>`;
+  }).join("")}</div>`;
 }
 
 function renderFieldCandidateFallback(field, selectedValue) {
@@ -627,6 +830,12 @@ function statusExplanation(status) {
 function renderErpReadiness(data) {
   const panel = document.getElementById("erpReadinessPanel");
   if (!panel) return;
+  const presentation = resolveDocumentPresentation();
+  if (!presentation.allowInvoiceExport) {
+    panel.className = "inspector-card readiness-card review";
+    panel.innerHTML = `<span class="label">${escapeHtml(t("erp.readiness"))}</span><strong>${escapeHtml(t("dossier.erp_unavailable_title"))}</strong><p>${escapeHtml(t("dossier.erp_unavailable"))}</p>`;
+    return;
+  }
   const readiness = data.erp_readiness || data.erp_json?.quality?.erp_readiness || {};
   const status = localizedReadinessStatus(readiness.erp_ready_status, data.validation?.status);
   const score = Number(readiness.erp_ready_score ?? 0);
@@ -679,6 +888,11 @@ function renderConfidences(confidences) {
 
 function renderLineItems(items, rowValidation = []) {
   const box = document.getElementById("lineItems");
+  const presentation = resolveDocumentPresentation();
+  if (!presentation.showLineItems) {
+    box.innerHTML = `<div class="note">${escapeHtml(t("dossier.line_items_not_applicable"))}</div>`;
+    return;
+  }
   const editableItems = items || [];
   if (lastResponse) {
     lastResponse.detected_fields = lastResponse.detected_fields || {};
@@ -1505,25 +1719,22 @@ function redrawPreview() {
 
   const scaleX = displayWidth / firstPage.width;
   const scaleY = displayHeight / firstPage.height;
+  const pageOverlays = getSelectedPageScopedOverlays();
   const counts = { ocr: 0, layout: 0, field: 0, row: 0, invalid: 0 };
   if (document.getElementById("toggleLayout").checked) {
-    (lastResponse.layout_blocks || [])
-      .filter((block) => normalizePage(block.page) === firstPage.page)
+    pageOverlays.layout_blocks
       .forEach((block) => addBox(stage, block.bbox, scaleX, scaleY, `layout ${block.block_type}`, block.block_type, block.confidence, block, counts, "layout"));
   }
   if (document.getElementById("toggleOcr").checked) {
-    (lastResponse.ocr_blocks || [])
-      .filter((block) => normalizePage(block.page_number) === firstPage.page)
+    pageOverlays.ocr_blocks
       .forEach((block) => addBox(stage, block.bbox, scaleX, scaleY, "ocr", block.text, block.confidence, block, counts, "ocr"));
   }
   if (document.getElementById("toggleFields").checked) {
-    (lastResponse.field_boxes || [])
-      .filter((box) => normalizePage(box.page) === firstPage.page)
+    pageOverlays.field_boxes
       .forEach((box) => addBox(stage, box.bbox, scaleX, scaleY, "field", box.field, box.confidence, box, counts, "field"));
   }
   if (document.getElementById("toggleRows").checked) {
-    getLineItemOverlayRows()
-      .filter((row) => normalizePage(row.page) === firstPage.page)
+    pageOverlays.line_rows
       .forEach((row) => addBox(stage, row.bbox, scaleX, scaleY, "row", row.label, row.confidence, row, counts, "row"));
   }
   renderOverlayDiagnostics(previewCanvas, firstPage, displayWidth, displayHeight, counts);
@@ -1534,12 +1745,21 @@ function setPreviewPage(index) {
   const pages = lastResponse?.document_preview?.pages || [];
   if (!pages.length) return;
   currentPageIndex = clamp(index, 0, pages.length - 1);
+  selectedPageWithinLogicalDocument = currentPageIndex;
   renderPreview(lastResponse);
 }
 
 function updatePageControls(totalPages) {
   const indicator = document.getElementById("pageIndicator");
-  if (indicator) indicator.textContent = totalPages ? t("review.page", { current: currentPageIndex + 1, total: totalPages }) : t("review.page_empty");
+  const physicalPage = getSelectedPhysicalPageNumber();
+  const documentIndex = selectedLogicalDocumentIndex + 1;
+  const documentTotal = dossierResponse?.document_count || 1;
+  const dossierPageTotal = dossierResponse?.page_count || totalPages;
+  if (indicator) indicator.textContent = totalPages ? t("dossier.page_within_document", { current: currentPageIndex + 1, total: totalPages }) : t("review.page_empty");
+  const context = document.getElementById("documentPageContext");
+  if (context) context.textContent = totalPages
+    ? `${t("dossier.document_position", { current: documentIndex, total: documentTotal })} · ${t("dossier.physical_page", { current: physicalPage, total: dossierPageTotal })}`
+    : "";
   const prev = document.getElementById("prevPageBtn");
   const next = document.getElementById("nextPageBtn");
   if (prev) prev.disabled = currentPageIndex <= 0;
@@ -1697,8 +1917,9 @@ function stableIgnoredRows() {
 }
 
 function buildReviewCorrectionPayload() {
+  const logicalDocument = getSelectedLogicalDocument();
   return {
-    document_id: lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
+    document_id: logicalDocument?.logical_document_id || lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
     source_file: lastResponse.erp_json?.metadata?.source_file || null,
     detected_fields: lastResponse.detected_fields || {},
     field_corrections: buildCorrectedFieldPayload(),
@@ -1737,6 +1958,10 @@ function applyCorrectionValidationResponse(data, { rerenderEditableRows = true }
   lastResponse.invoice_validation_report = data.invoice_validation_report || lastResponse.invoice_validation_report;
   lastResponse.validation = data.validation || lastResponse.validation;
   lastResponse.validation_explanation = data.validation_explanation || data.erp_json?.quality?.validation_explanation || lastResponse.validation_explanation;
+  const logicalDocument = getSelectedLogicalDocument();
+  if (logicalDocument) logicalDocument.response = lastResponse;
+  if (dossierResponse) dossierResponse.summary = summarizeLogicalDocuments();
+  renderDossierNavigation();
   refreshValidationHeader();
   renderErpReadiness(lastResponse);
   renderNotes(lastResponse);
@@ -1748,6 +1973,7 @@ function applyCorrectionValidationResponse(data, { rerenderEditableRows = true }
 
 function scheduleAutoValidation(reason = "edit") {
   if (!lastResponse) return;
+  if (!resolveDocumentPresentation().allowCorrections) return;
   clearTimeout(autoValidationTimer);
   const statusEl = document.getElementById("validationStatus");
   if (statusEl) {
@@ -1761,6 +1987,10 @@ function scheduleAutoValidation(reason = "edit") {
 async function validateCorrections({ automatic = false, reason = "manual" } = {}) {
   if (!lastResponse) {
     if (!automatic) showError(t("review.process_before_save"));
+    return;
+  }
+  if (!resolveDocumentPresentation().allowCorrections) {
+    if (!automatic) showError(t("dossier.correction_unavailable"));
     return;
   }
   if (automatic && autoValidationInFlight) {
