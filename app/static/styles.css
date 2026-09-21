@@ -373,6 +373,22 @@ button:disabled {
   overflow: hidden;
 }
 
+.dossier-navigation { padding: 18px; }
+.dossier-heading { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.dossier-heading h2 { margin: 3px 0 0; }
+.dossier-counts, .dossier-summary { color: var(--muted); font-size: .9rem; }
+.dossier-summary { margin-left: auto; }
+.logical-document-tabs { display: flex; gap: 10px; overflow-x: auto; padding: 12px 2px 6px; scrollbar-width: thin; }
+.logical-document-tab { min-width: 180px; max-width: 240px; flex: 0 0 auto; display: grid; gap: 3px; text-align: left; background: var(--surface, #fff); color: inherit; border: 1px solid var(--border, #d9e0e7); border-radius: 10px; padding: 10px 12px; }
+.logical-document-tab span, .logical-document-tab small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.logical-document-tab.active { border-width: 2px; box-shadow: 0 0 0 2px rgba(33, 96, 171, .12); }
+.logical-document-tab.active::after { content: "✓"; position: absolute; }
+.logical-document-tab:focus-visible { outline: 3px solid #2160ab; outline-offset: 2px; }
+.dossier-relationships { display: flex; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border, #d9e0e7); font-size: .9rem; }
+.document-page-context { color: var(--muted); font-size: .88rem; margin-top: 4px; }
+.readonly-fields { display: grid; gap: 8px; margin-top: 10px; }
+.readonly-fields > div { display: grid; grid-template-columns: minmax(130px, .8fr) 1.2fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border, #d9e0e7); }
+
 .review-actions {
   display: grid;
   gap: 10px;
@@ -1208,6 +1224,9 @@ pre {
 }
 
 @media (max-width: 560px) {
+  .dossier-heading { align-items: flex-start; gap: 8px; }
+  .dossier-summary { width: 100%; margin-left: 0; }
+  .logical-document-tab { min-width: 165px; }
   .summary-grid {
     grid-template-columns: 1fr;
   }

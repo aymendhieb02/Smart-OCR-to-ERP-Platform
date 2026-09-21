@@ -98,9 +98,18 @@
         <article><strong data-i18n="status.corrected">Corrected</strong><span data-i18n="status.corrected_help">A reviewer changed a value; validation refreshes automatically.</span></article>
       </section>
 
+      <section id="dossierNavigation" class="panel dossier-navigation" aria-labelledby="dossierTitle">
+        <div class="dossier-heading">
+          <div><span class="label" data-i18n="dossier.label">Dossier</span><h2 id="dossierTitle">-</h2></div>
+          <div id="dossierCounts" class="dossier-counts"></div>
+          <div id="dossierSummary" class="dossier-summary"></div>
+        </div>
+        <div id="logicalDocumentTabs" class="logical-document-tabs" role="tablist" data-i18n-aria-label="dossier.documents_aria" aria-label="Dossier documents"></div>
+        <div id="dossierRelationships" class="dossier-relationships"></div>
+      </section>
       <section class="panel visual-review">
         <div class="panel-head">
-          <h2 data-i18n="review.visual_title">Visual evidence review</h2>
+          <div><h2 data-i18n="review.visual_title">Dossier visual review</h2><div id="documentPageContext" class="document-page-context"></div></div>
           <div class="review-actions">
             <div class="page-controls" aria-label="Preview page controls" data-i18n-aria-label="review.page_controls_aria">
               <button class="ghost small" id="prevPageBtn" type="button" data-i18n="common.previous">Previous</button>
