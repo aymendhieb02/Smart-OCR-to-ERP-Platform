@@ -56,6 +56,17 @@ def test_optimized_mobile_v5_profile_is_cpu_mobile_configuration() -> None:
     }
 
 
+def test_documented_profile_environment_variable_selects_v5(monkeypatch) -> None:
+    settings.ocr_profile = "optimized_mobile_v4"
+    monkeypatch.setenv("INVOICE_OCR_PROFILE", "optimized_mobile_v5")
+
+    config = ocr_profiles.effective_ocr_config()
+
+    assert config["ocr_profile"] == "optimized_mobile_v5"
+    assert config["detector"] == "PP-OCRv5_mobile_det"
+    assert config["recognizer"] == "latin_PP-OCRv5_mobile_rec"
+
+
 def test_v4_profile_remains_unchanged_after_v5_addition() -> None:
     profile = ocr_profiles.PROFILES["optimized_mobile_v4"]
 

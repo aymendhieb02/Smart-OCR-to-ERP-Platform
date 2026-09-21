@@ -65,7 +65,7 @@ PROFILES: dict[str, OCRProfile] = {
 
 
 def selected_profile_name() -> str:
-    return (settings.ocr_profile or "optimized_mobile_v4").strip()
+    return (os.environ.get("INVOICE_OCR_PROFILE") or settings.ocr_profile or "optimized_mobile_v4").strip()
 
 
 def selected_profile() -> OCRProfile:
