@@ -51,11 +51,21 @@ PROFILES: dict[str, OCRProfile] = {
         use_gpu=False,
         preprocessing_profile="current",
     ),
+    "optimized_mobile_v5": OCRProfile(
+        name="optimized_mobile_v5",
+        detector="PP-OCRv5_mobile_det",
+        recognizer="latin_PP-OCRv5_mobile_rec",
+        cpu_threads=4,
+        input_max_side=1600,
+        enable_mkldnn=False,
+        use_gpu=False,
+        preprocessing_profile="current",
+    ),
 }
 
 
 def selected_profile_name() -> str:
-    return (settings.ocr_profile or "optimized_mobile_v4").strip()
+    return (os.environ.get("INVOICE_OCR_PROFILE") or settings.ocr_profile or "optimized_mobile_v4").strip()
 
 
 def selected_profile() -> OCRProfile:

@@ -120,14 +120,23 @@ class OCREngine:
         self._publish_cache_metrics()
         return lines
 
-    def run_fallback_regions(self, images: list[np.ndarray], region_names: list[str]) -> list[OCRLine]:
+    def run_fallback_regions(
+        self,
+        images: list[np.ndarray],
+        region_names: list[str],
+        *,
+        page_numbers: list[int] | tuple[int, ...] | None = None,
+    ) -> list[OCRLine]:
         if not images or not region_names:
             return []
+        if page_numbers is not None and len(page_numbers) != len(images):
+            raise ValueError("page_numbers must contain one original page number per image")
         started = time.perf_counter()
         paddle = _get_paddle_instance()
         requested = set(region_names)
         lines: list[OCRLine] = []
-        for page_number, image in enumerate(images, start=1):
+        physical_pages = page_numbers or list(range(1, len(images) + 1))
+        for page_number, image in zip(physical_pages, images):
             for region in build_ocr_regions(image):
                 if region.name == "full_page" or region.name not in requested:
                     continue
@@ -402,6 +411,7 @@ def _ocr_cache_key(
 def _paddle_fingerprint() -> str:
     ocr_config = effective_ocr_config()
     payload = {
+        "ocr_profile": ocr_config["ocr_profile"],
         "lang": "en",
         "enable_mkldnn": ocr_config["enable_mkldnn"],
         "cpu_threads": ocr_config["cpu_threads"],
