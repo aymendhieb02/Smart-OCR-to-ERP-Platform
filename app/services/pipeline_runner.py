@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 
 from app.core.config import settings
-from app.core.schemas import OCRLine, OCRResult, ProcessInvoiceResponse
+from app.core.schemas import DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
 from app.services.bbox_contract import apply_public_bbox_contract, bbox_loss_stage, count_public_ocr_boxes
 from app.services.document_classifier import classify_document
 from app.services.document_layout import analyze_document_layout
@@ -53,6 +53,7 @@ class DossierProcessResult:
     page_count: int
     page_classifications: tuple[PageClassification, ...]
     logical_documents: tuple[ProcessedLogicalDocument, ...]
+    document_preview: DocumentPreview
     ocr_engine: str
     timings: dict
 
@@ -78,6 +79,7 @@ def process_dossier_file(
             document = load_document(path, source_file, timing_recorder=timer)
         timings["file_loading"] = round(time.perf_counter() - stage_started, 4)
         _set_document_timer_metadata(timer, document)
+        document_preview = generate_document_preview(document)
 
         stage_started = time.perf_counter()
         with _timer_stage(timer, "ocr_engine_initialization", ocr_mode=ocr_mode, dossier=True):
@@ -116,6 +118,7 @@ def process_dossier_file(
         page_count=ocr_result.page_count,
         page_classifications=tuple(page_classifications),
         logical_documents=tuple(processed),
+        document_preview=document_preview,
         ocr_engine=ocr_result.engine,
         timings=timings,
     )

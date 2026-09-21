@@ -403,3 +403,43 @@ class ProcessInvoiceResponse(BaseModel):
     review_assistant: dict[str, Any] = Field(default_factory=dict)
     duplicate_detection: dict[str, Any] = Field(default_factory=dict)
     fraud_indicators: dict[str, Any] = Field(default_factory=dict)
+
+
+class DossierPageClassification(BaseModel):
+    page_number: int
+    document_type: str
+    document_family: str | None = None
+    match_score: float = 0.0
+    matched_anchors: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    starts_new_document: bool = True
+
+
+class DossierLogicalDocument(BaseModel):
+    logical_document_id: str
+    document_index: int
+    document_type: str
+    document_family: str | None = None
+    physical_page_numbers: list[int] = Field(default_factory=list)
+    page_classifications: list[DossierPageClassification] = Field(default_factory=list)
+    response: ProcessInvoiceResponse
+
+
+class DossierReviewSummary(BaseModel):
+    status: str
+    valid_count: int = 0
+    needs_review_count: int = 0
+    invalid_count: int = 0
+
+
+class ProcessDossierResponse(BaseModel):
+    dossier_id: str
+    source_file: str
+    page_count: int
+    document_count: int
+    summary: DossierReviewSummary
+    document_preview: DocumentPreview
+    page_classifications: list[DossierPageClassification] = Field(default_factory=list)
+    logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)
+    ocr_engine: str
+    timings: dict[str, Any] = Field(default_factory=dict)

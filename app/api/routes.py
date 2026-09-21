@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -9,6 +10,10 @@ from app.core.schemas import (
     CorrectionSubmission,
     ERPFlatExport,
     ERPInvoiceJSON,
+    DossierLogicalDocument,
+    DossierPageClassification,
+    DossierReviewSummary,
+    ProcessDossierResponse,
     ProcessInvoiceResponse,
     ReviewCorrectionResponse,
     ReviewCorrectionSubmission,
@@ -17,7 +22,7 @@ from app.services.correction_store import submit_corrections, validate_review_co
 from app.services.erp_mapper import map_to_flat_erp
 from app.services.file_loader import save_upload_to_temp
 from app.services.ocr_engine import OCREngine
-from app.services.pipeline_runner import process_document_file
+from app.services.pipeline_runner import process_document_file, process_dossier_file
 
 router = APIRouter()
 ocr_engine = OCREngine()
@@ -60,6 +65,63 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Invoice processing failed: {exc}") from exc
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+@router.post("/process-dossier", response_model=ProcessDossierResponse)
+async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierResponse:
+    temp_path: Path | None = None
+    try:
+        temp_path = await save_upload_to_temp(file)
+        result = process_dossier_file(
+            temp_path,
+            original_filename=file.filename,
+            ocr_engine=ocr_engine,
+            persist_erp_json=False,
+        )
+        dossier_id = str(uuid.uuid4())
+        documents = [
+            DossierLogicalDocument(
+                logical_document_id=f"{dossier_id}:{item.group.group_id}",
+                document_index=index,
+                document_type=item.group.document_type,
+                document_family=item.group.document_family,
+                physical_page_numbers=list(item.group.pages),
+                page_classifications=[DossierPageClassification(**classification.__dict__) for classification in item.group.page_classifications],
+                response=item.response,
+            )
+            for index, item in enumerate(result.logical_documents, start=1)
+        ]
+        statuses = [item.response.validation.status for item in result.logical_documents]
+        valid_count = sum(status == "valid" for status in statuses)
+        invalid_count = sum(status in {"invalid", "rejected"} for status in statuses)
+        needs_review_count = len(statuses) - valid_count - invalid_count
+        summary_status = "invalid" if invalid_count else "needs_review" if needs_review_count else "valid"
+        return ProcessDossierResponse(
+            dossier_id=dossier_id,
+            source_file=result.source_file,
+            page_count=result.page_count,
+            document_count=len(documents),
+            summary=DossierReviewSummary(
+                status=summary_status,
+                valid_count=valid_count,
+                needs_review_count=needs_review_count,
+                invalid_count=invalid_count,
+            ),
+            document_preview=result.document_preview,
+            page_classifications=[DossierPageClassification(**classification.__dict__) for classification in result.page_classifications],
+            logical_documents=documents,
+            ocr_engine=result.ocr_engine,
+            timings=result.timings,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Dossier processing failed: {exc}") from exc
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
