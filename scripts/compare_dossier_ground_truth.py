@@ -90,8 +90,13 @@ def _prediction_values(document: dict[str, Any]) -> dict[str, Any]:
     identifiers = document.get("identifiers", {})
     financial = document.get("financial", {})
     expanded = document.get("expanded_fields", {})
+    rows = document.get("line_items") or fields.get("line_items") or []
+    first_row = rows[0] if rows else {}
     def first(*values: Any) -> Any:
         return next((value for value in values if value is not None), None)
+    def expanded_value(key: str) -> Any:
+        value = expanded.get(key)
+        return value.get("value") if isinstance(value, dict) and "value" in value else value
     return {
         "document_type": document.get("document_type"),
         "document_family": document.get("document_family"),
@@ -111,11 +116,15 @@ def _prediction_values(document: dict[str, Any]) -> dict[str, Any]:
         "referenced_invoice": identifiers.get("referenced_invoice"),
         "declaration_reference": identifiers.get("declaration_reference"),
         "invoice_value": financial.get("invoice_value"),
-        **{key: first(parties.get(key), fields.get(key), expanded.get(key)) for key in ("consignee", "exporter", "importer", "declarant")},
-        **{key: first(fields.get(key), expanded.get(key), document.get(key)) for key in (
+        **{key: first(parties.get(key), fields.get(key), expanded_value(key)) for key in ("consignee", "exporter", "importer", "declarant")},
+        **{key: first(fields.get(key), expanded_value(key), document.get(key)) for key in (
             "hs_code", "incoterm", "origin", "destination", "payment", "gross_weight",
             "net_weight", "number_of_bags", "delivery",
         )},
+        **{key: first(first_row.get(key), fields.get(key)) for key in (
+            "description", "quantity", "unit", "unit_price",
+        )},
+        "line_total": first(first_row.get("line_total"), first_row.get("line_total_ht"), first_row.get("line_total_ttc"), first_row.get("total")),
     }
 
 
