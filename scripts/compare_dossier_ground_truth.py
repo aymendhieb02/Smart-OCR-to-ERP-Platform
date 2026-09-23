@@ -227,12 +227,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Compare dossier predictions with explicitly verified human ground truth.")
     parser.add_argument("--prediction", type=Path, required=True)
     parser.add_argument("--ground-truth", type=Path, required=True)
+    parser.add_argument("--output", type=Path, help="Optional local JSON report path.")
     args = parser.parse_args()
     try:
         result = compare_files(args.prediction, args.ground_truth)
     except UnverifiedGroundTruthError as exc:
         parser.exit(2, f"STOP: {exc}\n")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+    else:
+        print(rendered, end="")
     return 0
 
 
