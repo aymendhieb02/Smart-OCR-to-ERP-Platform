@@ -146,3 +146,52 @@ def test_comparator_accepts_explicit_verification_and_classifies_mismatches(tmp_
     assert "MISSING_FIELD" in errors
     assert "TABLE_ROW_MISSING" in errors
     assert result["summary_by_section"]["document"]["errors"] == 1
+
+
+def test_comparator_uses_structured_fields_and_excludes_ocr_row_metadata(tmp_path):
+    machine = _machine(tmp_path)
+    machine["dossier"]["logical_documents"][0]["line_items"] = [{
+        "description": "Échantillon synthétique", "quantity": 2, "unit": "TEST_UNIT",
+        "confidence": 0.9, "bbox": {"x1": 1, "y1": 2, "x2": 3, "y2": 4},
+    }]
+    truth = build_review_template(machine)
+    truth["label_status"] = "verified"
+    truth["human_verified"] = True
+    for doc in truth["logical_documents"]:
+        for review in doc["fields"].values():
+            review["verified_value"] = copy.deepcopy(review["machine_value"])
+            review["verification_status"] = "verified"
+        doc["line_items"]["verified_rows"] = [
+            {"description": "Échantillon synthétique", "quantity": 2, "unit": "TEST_UNIT"}
+        ] if doc["document_role"] == "producer" else []
+        doc["line_items"]["verification_status"] = "verified"
+    for relation in truth["relations"]:
+        relation["verified_status"] = relation["machine_status"]
+        relation["verification_status"] = "verified"
+
+    result = compare_payloads(machine, truth)
+    row_result = next(item for item in result["comparisons"]["table"] if item["field"] == "line_items[0]")
+    assert row_result["result"] == "CORRECT"
+    assert "bbox" not in row_result["predicted"]
+    assert result["comparisons"]["document"][0]["page"] == 1
+
+
+def test_comparator_marks_unclear_null_as_unknown_and_maps_custom_fields():
+    from scripts.compare_dossier_ground_truth import _prediction_values, _comparison
+
+    prediction = {
+        "document_type": "customs_declaration",
+        "document_family": "customs_test",
+        "detected_fields": {"hs_code": "25232900000", "gross_weight": 1000000},
+        "identifiers": {"declaration_number": "DECL-TEST-01", "declaration_date": "2026-01-02"},
+        "financial": {"invoice_value": 52000.0, "currency": "EUR"},
+        "parties": {"exporter": "SUPPLIER_TEST"},
+    }
+    values = _prediction_values(prediction)
+    assert values["declaration_number"] == "DECL-TEST-01"
+    assert values["declaration_date"] == "2026-01-02"
+    assert values["invoice_value"] == 52000.0
+    assert values["hs_code"] == "25232900000"
+    assert values["exporter"] == "SUPPLIER_TEST"
+    unclear = _comparison("doc_test", "optional_test", None, None, "identifiers", presence_status="unclear")
+    assert unclear["result"] == "UNKNOWN"
