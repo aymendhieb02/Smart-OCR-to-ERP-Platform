@@ -186,8 +186,12 @@ def _compare_rows(document_id: str, actual: list[Any], expected: list[Any], page
 def _row_values(row: Any) -> Any:
     if not isinstance(row, dict):
         return row
-    keys = ("reference", "description", "quantity", "unit", "unit_price", "line_total", "line_total_ht", "line_total_ttc", "total")
-    return {key: row[key] for key in keys if key in row and row[key] is not None}
+    keys = ("reference", "description", "quantity", "unit", "unit_price")
+    values = {key: row[key] for key in keys if key in row and row[key] is not None}
+    line_total = next((row[key] for key in ("line_total", "line_total_ht", "line_total_ttc", "total") if row.get(key) is not None), None)
+    if line_total is not None:
+        values["line_total"] = line_total
+    return values
 
 
 def _prediction_evidence(document: dict[str, Any], source_page: Any) -> list[dict[str, Any]]:
