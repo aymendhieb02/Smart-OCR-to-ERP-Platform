@@ -182,7 +182,7 @@ def test_comparator_marks_unclear_null_as_unknown_and_maps_custom_fields():
     prediction = {
         "document_type": "customs_declaration",
         "document_family": "customs_test",
-        "detected_fields": {"hs_code": "25232900000", "gross_weight": 1000000},
+        "detected_fields": {"hs_code": "HS_TEST_001", "gross_weight": 9999},
         "identifiers": {"declaration_number": "DECL-TEST-01", "declaration_date": "2026-01-02"},
         "financial": {"invoice_value": 52000.0, "currency": "EUR"},
         "parties": {"exporter": "SUPPLIER_TEST"},
@@ -191,7 +191,7 @@ def test_comparator_marks_unclear_null_as_unknown_and_maps_custom_fields():
     assert values["declaration_number"] == "DECL-TEST-01"
     assert values["declaration_date"] == "2026-01-02"
     assert values["invoice_value"] == 52000.0
-    assert values["hs_code"] == "25232900000"
+    assert values["hs_code"] == "HS_TEST_001"
     assert values["exporter"] == "SUPPLIER_TEST"
     unclear = _comparison("doc_test", "optional_test", None, None, "identifiers", presence_status="unclear")
     assert unclear["result"] == "UNKNOWN"
