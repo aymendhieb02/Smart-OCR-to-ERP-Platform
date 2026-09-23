@@ -276,7 +276,7 @@ function renderSelectedLogicalDocument(rawResponse = dossierResponse) {
   if (!logicalDocument) return;
   resetCorrections();
   const normalized = normalizeReviewResponse(logicalDocument.response);
-  normalized.document_preview = { source_file: dossierResponse.source_file, pages: getSelectedDocumentPreviewPages() };
+  normalized.document_preview = { source_file: dossierResponse.source_file, pages: dossierResponse.document_preview?.pages || [] };
   lastResponse = normalized;
   window.__REVIEW_DEBUG__ = {
     rawResponse,
@@ -287,7 +287,7 @@ function renderSelectedLogicalDocument(rawResponse = dossierResponse) {
     overlayCounts: normalized.overlay_counts,
     renderErrors: [],
   };
-  currentPageIndex = selectedPageWithinLogicalDocument;
+  currentPageIndex = getSelectedDossierPageIndex();
   const validation = normalized.validation || {};
   const status = validation.status || (validation.is_valid ? "valid" : "invalid");
   const classification = normalized.document_classification || {};
@@ -369,11 +369,19 @@ function getSelectedDocumentPreviewPages() {
 }
 
 function getSelectedPreviewPage() {
-  return getSelectedDocumentPreviewPages()[selectedPageWithinLogicalDocument] || null;
+  return dossierResponse?.document_preview?.pages?.[getSelectedDossierPageIndex()] || null;
 }
 
 function getSelectedPhysicalPageNumber() {
-  return getSelectedPreviewPage()?.page ?? getSelectedLogicalDocument()?.physical_page_numbers?.[selectedPageWithinLogicalDocument] ?? null;
+  return getSelectedPreviewPage()?.page ?? null;
+}
+
+function getSelectedDossierPageIndex() {
+  const pages = dossierResponse?.document_preview?.pages || [];
+  const index = window.DossierNavigation?.resolveDossierPageIndex(
+    getSelectedLogicalDocument(), selectedPageWithinLogicalDocument, pages
+  ) ?? -1;
+  return index >= 0 ? index : 0;
 }
 
 function getSelectedPageScopedOverlays() {
@@ -459,6 +467,29 @@ function selectLogicalDocument(index) {
   renderDossierNavigation();
   renderDossierRelationships();
   renderSelectedLogicalDocument();
+}
+
+function selectPhysicalPage(pageIndex) {
+  const pages = dossierResponse?.document_preview?.pages || [];
+  const page = pages[pageIndex];
+  if (!page) return;
+  const documents = dossierResponse?.logical_documents || [];
+  const selection = window.DossierNavigation?.resolvePhysicalPageSelection(documents, page.page);
+  if (!selection) return;
+  const { documentIndex, pageWithinDocumentIndex } = selection;
+  const logicalDocument = documents[documentIndex];
+  selectedLogicalDocumentIndex = documentIndex;
+  selectedPageWithinLogicalDocument = pageWithinDocumentIndex;
+  currentPageIndex = pageIndex;
+  renderDossierNavigation();
+  renderDossierRelationships();
+  renderSelectedLogicalDocument();
+}
+
+function getSelectedDocumentPages(logicalDocument = getSelectedLogicalDocument()) {
+  const previewPages = dossierResponse?.document_preview?.pages || [];
+  const available = new Set(previewPages.map((page) => normalizePage(page.page)));
+  return (logicalDocument?.physical_page_numbers || []).filter((page) => available.has(normalizePage(page)));
 }
 
 function structuredFieldValue(document, field) {
@@ -1643,8 +1674,7 @@ function focusDynamicRegion(row, tableId) {
     const pages = lastResponse?.document_preview?.pages || [];
     const targetIndex = pages.findIndex((page) => page.page === normalizePage(row.page));
     if (targetIndex >= 0) {
-      currentPageIndex = targetIndex;
-      renderPreview(lastResponse);
+      selectPhysicalPage(targetIndex);
       setTimeout(() => focusDynamicRegion(row, tableId), 100);
       return;
     }
@@ -1742,11 +1772,9 @@ function redrawPreview() {
 }
 
 function setPreviewPage(index) {
-  const pages = lastResponse?.document_preview?.pages || [];
+  const pages = dossierResponse?.document_preview?.pages || [];
   if (!pages.length) return;
-  currentPageIndex = clamp(index, 0, pages.length - 1);
-  selectedPageWithinLogicalDocument = currentPageIndex;
-  renderPreview(lastResponse);
+  selectPhysicalPage(clamp(index, 0, pages.length - 1));
 }
 
 function updatePageControls(totalPages) {
@@ -1754,16 +1782,20 @@ function updatePageControls(totalPages) {
   const physicalPage = getSelectedPhysicalPageNumber();
   const documentIndex = selectedLogicalDocumentIndex + 1;
   const documentTotal = dossierResponse?.document_count || 1;
-  const dossierPageTotal = dossierResponse?.page_count || totalPages;
-  if (indicator) indicator.textContent = totalPages ? t("dossier.page_within_document", { current: currentPageIndex + 1, total: totalPages }) : t("review.page_empty");
+  const dossierPages = dossierResponse?.document_preview?.pages || [];
+  const dossierPageIndex = getSelectedDossierPageIndex();
+  const selectedDocumentPageCount = getSelectedDocumentPages().length;
+  if (indicator) indicator.textContent = dossierPages.length
+    ? t("dossier.physical_page", { current: normalizePage(physicalPage), total: dossierResponse.page_count || dossierPages.length })
+    : t("review.page_empty");
   const context = document.getElementById("documentPageContext");
   if (context) context.textContent = totalPages
-    ? `${t("dossier.document_position", { current: documentIndex, total: documentTotal })} · ${t("dossier.physical_page", { current: physicalPage, total: dossierPageTotal })}`
+    ? `${t("dossier.document_position", { current: documentIndex, total: documentTotal })}${selectedDocumentPageCount > 1 ? ` · ${t("dossier.page_within_document", { current: selectedPageWithinLogicalDocument + 1, total: selectedDocumentPageCount })}` : ""}`
     : "";
   const prev = document.getElementById("prevPageBtn");
   const next = document.getElementById("nextPageBtn");
-  if (prev) prev.disabled = currentPageIndex <= 0;
-  if (next) next.disabled = currentPageIndex >= totalPages - 1;
+  if (prev) prev.disabled = dossierPageIndex <= 0;
+  if (next) next.disabled = dossierPageIndex >= dossierPages.length - 1;
 }
 
 function normalizePage(value) {

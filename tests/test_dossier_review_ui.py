@@ -12,7 +12,7 @@ def test_dossier_state_and_two_level_navigation_are_explicit():
     assert "let dossierResponse = null" in APP_JS
     assert "let selectedLogicalDocumentIndex = 0" in APP_JS
     assert "let selectedPageWithinLogicalDocument = 0" in APP_JS
-    assert "selectedPageWithinLogicalDocument = currentPageIndex" in APP_JS
+    assert "selectedPageWithinLogicalDocument = pageWithinDocumentIndex" in APP_JS
     assert "selectedLogicalDocumentIndex = index" in APP_JS
     assert "selectedPageWithinLogicalDocument = 0" in APP_JS
 
@@ -32,6 +32,16 @@ def test_preview_and_overlay_selection_use_physical_page_membership():
     assert "function getSelectedPhysicalPageNumber" in APP_JS
     assert "function getSelectedPageScopedOverlays" in APP_JS
     assert "const pageOverlays = getSelectedPageScopedOverlays()" in APP_JS
+    assert "pages: dossierResponse.document_preview?.pages || []" in APP_JS
+    assert "window.DossierNavigation?.resolvePhysicalPageSelection" in APP_JS
+    assert "renderDossierNavigation();" in APP_JS[APP_JS.index("function selectPhysicalPage"):APP_JS.index("function getSelectedDocumentPages")]
+
+
+def test_dossier_physical_pager_is_primary_and_overlay_scope_remains_physical():
+    assert 't("dossier.physical_page", { current: normalizePage(physicalPage)' in APP_JS
+    assert "const onPage = (item) => normalizePage(item.page ?? item.page_number) === normalizePage(page)" in APP_JS
+    assert "getSelectedDocumentResponse" in APP_JS
+    assert "selectedDocumentPageCount > 1" in APP_JS
 
 
 def test_presentation_resolver_centralizes_document_behavior():
