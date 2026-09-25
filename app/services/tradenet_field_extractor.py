@@ -234,6 +234,39 @@ def _select_party_row(lines: list[OCRLine]) -> OCRLine:
     return max(complete, key=score) if complete else best
 
 
+def _same_party_observation(left: OCRLine, right: OCRLine, height: int) -> bool:
+    """Match alternate OCR readings of one printed line, not adjacent lines."""
+    if not left.bbox or not right.bbox:
+        return False
+    if abs(_normalized_center_y(left, height) - _normalized_center_y(right, height)) > 0.006:
+        return False
+    overlap_x = max(0.0, min(left.bbox.x2, right.bbox.x2) - max(left.bbox.x1, right.bbox.x1))
+    shorter_width = min(left.bbox.x2 - left.bbox.x1, right.bbox.x2 - right.bbox.x1)
+    return shorter_width > 0 and overlap_x / shorter_width >= 0.6
+
+
+def _party_reading_order(lines: list[OCRLine], height: int) -> list[OCRLine]:
+    """Keep separate same-row fragments, but collapse overlapping OCR sources."""
+    clusters: list[list[OCRLine]] = []
+    for line in sorted(lines, key=lambda item: (_normalized_center_y(item, height), item.bbox.x1)):
+        cluster = next(
+            (group for group in clusters if any(_same_party_observation(line, other, height) for other in group)),
+            None,
+        )
+        if cluster is None:
+            clusters.append([line])
+        else:
+            cluster.append(line)
+    selected = [_select_party_row(group) for group in clusters]
+    rows: list[list[OCRLine]] = []
+    for line in sorted(selected, key=lambda item: _normalized_center_y(item, height)):
+        if rows and abs(_normalized_center_y(line, height) - _normalized_center_y(rows[-1][0], height)) <= 0.006:
+            rows[-1].append(line)
+        else:
+            rows.append([line])
+    return [line for row in rows for line in sorted(row, key=lambda item: item.bbox.x1)]
+
+
 def _add_declaration_type_cell(fields: dict[str, FieldExtractionDetail], lines: list[OCRLine], width: int, height: int, vertical_shift: float) -> None:
     if "declaration_type" in fields:
         return
@@ -261,6 +294,25 @@ def _party_label(text: str, role: str) -> bool:
     return normalized.startswith(("expor", "expr", "lxpor")) if role == "exporter" else normalized.startswith(("impor", "imyx", "inn"))
 
 
+def _party_form_label(text: str) -> bool:
+    normalized = _normalize(text)
+    return (_party_label(text, "exporter") or _party_label(text, "importer")
+            or normalized.startswith((
+                "declar", "code", "numero", "date", "facture", "d a e", "dae",
+                "type declaration", "nbr total articles", "entrepot", "adresse de stockage",
+            )))
+
+
+def _mostly_in_party_cell(box: BoundingBox, width: int, height: int, bounds: tuple[float, float, float, float]) -> bool:
+    if not _in_cell(box, width, height, bounds):
+        return False
+    left, top, right, bottom = bounds
+    overlap_x = max(0.0, min(box.x2, right * width) - max(box.x1, left * width))
+    overlap_y = max(0.0, min(box.y2, bottom * height) - max(box.y1, top * height))
+    return (overlap_x >= 0.7 * (box.x2 - box.x1)
+            and overlap_y >= 0.6 * (box.y2 - box.y1))
+
+
 def _extract_party(lines: list[OCRLine], role: str, width: int, height: int, vertical_shift: float) -> FieldExtractionDetail | None:
     label_box = _shift_cell((0.18, 0.015, 0.48, 0.088) if role == "exporter" else (0.18, 0.075, 0.48, 0.145), vertical_shift)
     labels = [line for line in lines if _in_cell(line.bbox, width, height, label_box) and _party_label(line.text, role)]
@@ -284,36 +336,24 @@ def _extract_party(lines: list[OCRLine], role: str, width: int, height: int, ver
         ]
         if declarant_labels:
             lower_limit = min(lower_limit, min(declarant_labels) - 0.005)
+    cell = (0.16, label_y + 0.006, 0.49, lower_limit)
+    form_labels = [line for line in lines if line.bbox and _party_form_label(line.text)]
     candidates = []
     for line in lines:
-        if not line.bbox or line is label or not _in_cell(line.bbox, width, height, (0.16, label_y + 0.006, 0.49, lower_limit)):
+        if not line.bbox or line is label or not _mostly_in_party_cell(line.bbox, width, height, cell):
             continue
         normalized = _normalize(line.text)
-        if (sum(char.isalpha() for char in normalized) < 5
-                or sum(char.isdigit() for char in normalized) > 2
-                or _party_label(line.text, "exporter") or _party_label(line.text, "importer")
-                or normalized.startswith(("declar", "code", "numero", "date", "facture"))
+        if (sum(char.isalpha() for char in normalized) < 3
+                or _party_form_label(line.text)
+                or any(_same_party_observation(line, other, height) for other in form_labels)
                 or (line.confidence or 0.0) < 0.45):
             continue
         candidates.append(line)
     if not candidates:
         return None
-    # A full-page and a cropped reading of the same printed line are
-    # alternatives, not separate address lines.
-    rows: list[list[OCRLine]] = []
-    for line in sorted(candidates, key=lambda item: _normalized_center_y(item, height)):
-        if rows and abs(_normalized_center_y(line, height) - _normalized_center_y(rows[-1][0], height)) <= 0.006:
-            rows[-1].append(line)
-        else:
-            rows.append([line])
-    selected_lines = [_select_party_row(row) for row in rows[:3]]
+    selected_lines = _party_reading_order(candidates, height)
     first = selected_lines[0]
-    value_lines = [first.text.strip()]
-    if len(first.text.strip()) < 18 and len(selected_lines) > 1:
-        continuation = selected_lines[1].text.strip()
-        if not re.match(r"^\d|(?i:^(?:rue|avenue|av\.|libye|libya|tunisie|tunis)\b)", continuation):
-            value_lines.append(continuation)
-    value = " ".join(value_lines)
+    value = " ".join(" ".join(line.text.split()) for line in selected_lines)
     box = BoundingBox(
         x1=min(line.bbox.x1 for line in selected_lines),
         y1=min(line.bbox.y1 for line in selected_lines),

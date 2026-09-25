@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from app.core.schemas import BoundingBox, OCRLine, OCRResult
 from app.services.ocr_engine import _map_inference_bbox_to_page
@@ -224,12 +225,157 @@ def _business_form(*, width=1200, height=1600, dx=0, dy=0):
     ]
 
 
+def _party_form(exporter_lines, importer_lines, *, width=1200, height=1600, dx=0, dy=0):
+    lines = [
+        _line("Exportateur", 0.25 * width + dx, 0.04 * height + dy, width=width, height=height),
+        _line("Importateur", 0.25 * width + dx, 0.098 * height + dy, width=width, height=height),
+        _line("Déclarant", 0.25 * width + dx, 0.14 * height + dy, width=width, height=height),
+    ]
+    for index, text in enumerate(exporter_lines):
+        lines.append(_line(text, 0.30 * width + dx, (0.055 + index * 0.014) * height + dy, width=width, height=height))
+    for index, text in enumerate(importer_lines):
+        lines.append(_line(text, 0.30 * width + dx, (0.111 + index * 0.011) * height + dy, width=width, height=height))
+    return lines
+
+
+@pytest.mark.parametrize(("exporter_lines", "expected"), [
+    (["ALPHA EXPORT"], "ALPHA EXPORT"),
+    (["ALPHA EXPORT", "INDUSTRIAL ZONE NORTH"], "ALPHA EXPORT INDUSTRIAL ZONE NORTH"),
+    (["ALPHA EXPORT", "INDUSTRIAL ZONE NORTH", "PORT DISTRICT"], "ALPHA EXPORT INDUSTRIAL ZONE NORTH PORT DISTRICT"),
+])
+def test_exporter_uses_every_meaningful_cell_line(exporter_lines, expected):
+    fields = extract_tradenet_fields(_party_form(exporter_lines, ["BETA IMPORT"]))
+    assert fields["exporter"].value == expected
+    assert fields["exporter"].evidence_text == "\n".join(exporter_lines)
+
+
+@pytest.mark.parametrize(("importer_lines", "expected"), [
+    (["BETA IMPORT"], "BETA IMPORT"),
+    (["BETA IMPORT", "LIBYA"], "BETA IMPORT LIBYA"),
+    (["BETA IMPORT", "MARKET STREET", "LIBYA"], "BETA IMPORT MARKET STREET LIBYA"),
+])
+def test_importer_uses_every_meaningful_cell_line(importer_lines, expected):
+    fields = extract_tradenet_fields(_party_form(["ALPHA EXPORT"], importer_lines))
+    assert fields["importer"].value == expected
+    assert fields["importer"].evidence_text == "\n".join(importer_lines)
+
+
+def test_party_address_with_numeric_prefix_and_repeated_whitespace_is_retained():
+    lines = _party_form(["ALPHA   EXPORT", "006  INDUSTRIAL   ZONE NORTH"], ["BETA IMPORT", "LIBYA"])
+    fields = extract_tradenet_fields(lines)
+    assert fields["exporter"].value == "ALPHA EXPORT 006 INDUSTRIAL ZONE NORTH"
+    assert fields["exporter"].evidence_text == "ALPHA   EXPORT\n006  INDUSTRIAL   ZONE NORTH"
+
+
+def test_party_cells_exclude_neighboring_labels_codes_dates_and_declarant():
+    lines = _party_form(["ALPHA EXPORT", "NORTH DISTRICT"], ["BETA IMPORT", "LIBYA"])
+    lines.extend([
+        _line("Code", 0.46 * 1200, 0.068 * 1600),
+        _line("12345678", 0.46 * 1200, 0.082 * 1600),
+        _line("04-02-2025", 0.52 * 1200, 0.084 * 1600),
+        _line("D.A.E", 0.47 * 1200, 0.116 * 1600),
+        _line("AGENT TEST", 0.30 * 1200, 0.16 * 1600),
+        _line("Type déclaration", 0.77 * 1200, 0.12 * 1600),
+    ])
+    fields = extract_tradenet_fields(lines)
+    assert fields["exporter"].value == "ALPHA EXPORT NORTH DISTRICT"
+    assert fields["importer"].value == "BETA IMPORT LIBYA"
+    assert fields["exporter"].bbox.y2 < fields["importer"].bbox.y1
+    assert "AGENT" not in fields["importer"].evidence_text
+
+
+def test_noisy_ocr_alternative_of_code_label_is_excluded_by_shared_geometry():
+    lines = _party_form(["ALPHA EXPORT", "NORTH DISTRICT"], ["BETA IMPORT", "LIBYA"])
+    for y in (0.069, 0.115):
+        label = _line("Code", 0.465 * 1200, y * 1600, box_w=65, source="tradenet_parties")
+        lines.extend([label, label.model_copy(update={"text": "Oods>A", "source": "full_page", "confidence": 0.78})])
+    fields = extract_tradenet_fields(lines)
+    assert fields["exporter"].value == "ALPHA EXPORT NORTH DISTRICT"
+    assert fields["importer"].value == "BETA IMPORT LIBYA"
+
+
+def test_exporter_cell_has_no_three_line_cap():
+    lines = _party_form([], ["BETA IMPORT"])
+    for text, y in zip(("ALPHA EXPORT", "INDUSTRIAL ZONE", "NORTH SECTOR", "PORT DISTRICT"), (0.052, 0.063, 0.074, 0.085)):
+        lines.append(_line(text, 0.30 * 1200, y * 1600))
+    assert extract_tradenet_fields(lines)["exporter"].value == "ALPHA EXPORT INDUSTRIAL ZONE NORTH SECTOR PORT DISTRICT"
+
+
+def test_importer_cell_stops_before_declarant_and_storage_address():
+    lines = _party_form(["ALPHA EXPORT"], ["BETA IMPORT", "LIBYA"])
+    lines.extend([
+        _line("Déclarant", 0.25 * 1200, 0.14 * 1600),
+        _line("AGENT TEST", 0.30 * 1200, 0.151 * 1600),
+        _line("Adresse de stockage", 0.30 * 1200, 0.157 * 1600),
+        _line("WAREHOUSE DISTRICT", 0.30 * 1200, 0.170 * 1600),
+    ])
+    assert extract_tradenet_fields(lines)["importer"].value == "BETA IMPORT LIBYA"
+
+
+def test_duplicate_sources_and_competing_party_readings_choose_one_physical_line():
+    lines = _party_form(["ALPHA EXPORT", "NORTH DISTRICT"], ["BETA IMPORT", "LIBYA"])
+    company = next(line for line in lines if line.text == "ALPHA EXPORT")
+    address = next(line for line in lines if line.text == "NORTH DISTRICT")
+    lines.extend([
+        company.model_copy(update={"source": "regional_fallback", "confidence": 0.82}),
+        company.model_copy(update={"text": "ALPHA EXPO", "source": "tradenet_parties", "confidence": 0.94}),
+        address.model_copy(update={"source": "tradenet_parties", "confidence": 0.88}),
+    ])
+    fields = extract_tradenet_fields(lines)
+    assert fields["exporter"].value == "ALPHA EXPORT NORTH DISTRICT"
+    assert fields["exporter"].evidence_text == "ALPHA EXPORT\nNORTH DISTRICT"
+    assert len(fields["exporter"].evidence_text.splitlines()) == 2
+
+
+def test_out_of_order_observations_and_same_row_fragments_use_reading_order():
+    lines = _party_form([], ["BETA IMPORT"])
+    lines.extend([
+        _line("ZONE NORTH", 0.35 * 1200, 0.069 * 1600),
+        _line("INDUSTRIAL", 0.23 * 1200, 0.069 * 1600),
+        _line("ALPHA EXPORT", 0.30 * 1200, 0.055 * 1600),
+    ])
+    fields = extract_tradenet_fields(lines)
+    assert fields["exporter"].value == "ALPHA EXPORT INDUSTRIAL ZONE NORTH"
+    assert fields["exporter"].evidence_text == "ALPHA EXPORT\nINDUSTRIAL\nZONE NORTH"
+
+
+def test_party_union_bbox_uses_only_selected_lines_and_keeps_page_and_source():
+    lines = _party_form(["ALPHA EXPORT", "NORTH DISTRICT"], ["BETA IMPORT"])
+    company = next(line for line in lines if line.text == "ALPHA EXPORT")
+    address = next(line for line in lines if line.text == "NORTH DISTRICT")
+    address.source = "tradenet_parties"
+    lines.append(_line("FAR AWAY", 0.80 * 1200, 0.070 * 1600))
+    detail = extract_tradenet_fields(lines)["exporter"]
+    assert detail.bbox == BoundingBox(
+        x1=min(company.bbox.x1, address.bbox.x1),
+        y1=min(company.bbox.y1, address.bbox.y1),
+        x2=max(company.bbox.x2, address.bbox.x2),
+        y2=max(company.bbox.y2, address.bbox.y2),
+    )
+    assert detail.page == 3
+    assert detail.page_width == 1200
+    assert detail.page_height == 1600
+    assert "full_page" in detail.source and "tradenet_parties" in detail.source
+
+
+@pytest.mark.parametrize(("width", "height", "dx", "dy"), [
+    (1200, 1600, 0, 0),
+    (2400, 3200, 28, 32),
+    (1000, 1400, -8, 12),
+])
+def test_multiline_parties_follow_normalized_page_geometry(width, height, dx, dy):
+    lines = _party_form(["ALPHA EXPORT", "INDUSTRIAL ZONE"], ["BETA IMPORT", "LIBYA"], width=width, height=height, dx=dx, dy=dy)
+    fields = extract_tradenet_fields(lines, page_dimensions={3: (width, height)})
+    assert fields["exporter"].value == "ALPHA EXPORT INDUSTRIAL ZONE"
+    assert fields["importer"].value == "BETA IMPORT LIBYA"
+
+
 def test_party_roles_are_separate_and_multiline_evidence_stays_in_its_cell():
     fields = extract_tradenet_fields(_business_form())
 
-    assert fields["exporter"].value == "SUPPLIER TEST LTD"
+    assert fields["exporter"].value == "SUPPLIER TEST LTD 1 TEST STREET"
     assert fields["exporter"].evidence_text == "SUPPLIER TEST LTD\n1 TEST STREET"
-    assert fields["importer"].value == "CUSTOMER TEST LLC"
+    assert fields["importer"].value == "CUSTOMER TEST LLC LIBYA"
     assert fields["importer"].evidence_text == "CUSTOMER TEST LLC\nLIBYA"
     assert "AGENT" not in fields["importer"].evidence_text
     assert fields["exporter"].bbox.y2 < fields["importer"].bbox.y1
@@ -265,8 +411,8 @@ def test_ptfn_rate_and_printed_customs_total_use_three_distinct_cells():
 def test_form_cells_scale_and_shift_without_fixed_raster_coordinates():
     fields = extract_tradenet_fields(_business_form(width=2400, height=3200, dx=28, dy=32), page_dimensions={3: (2400, 3200)})
 
-    assert fields["exporter"].value == "SUPPLIER TEST LTD"
-    assert fields["importer"].value == "CUSTOMER TEST LLC"
+    assert fields["exporter"].value == "SUPPLIER TEST LTD 1 TEST STREET"
+    assert fields["importer"].value == "CUSTOMER TEST LLC LIBYA"
     assert fields["ptfn_amount"].value == 12345.0
     assert fields["currency_conversion_rate"].value == 3.1234
     assert fields["customs_total_value_tnd"].value == 38548.75
@@ -287,7 +433,7 @@ def test_header_alignment_tracks_a_form_shifted_up_within_scan():
     ])
     fields = extract_tradenet_fields(lines, page_dimensions={3: (1200, 1600)})
     assert fields["declaration_type"].value == "E"
-    assert fields["exporter"].value == "SUPPLIER TEST LTD"
+    assert fields["exporter"].value == "SUPPLIER TEST LTD 1 TEST STREET"
     assert fields["ptfn_amount"].value == 12345.0
     assert fields["currency_conversion_rate"].value == 3.1234
     assert fields["customs_total_value_tnd"].value == 38548.75
@@ -333,7 +479,7 @@ def test_party_ocr_prefers_complete_legible_name_over_truncated_crop():
     crop = original.model_copy(update={"text": "USTOMER TEST LLC", "confidence": 0.94, "source": "regional_fallback"})
     noisy = original.model_copy(update={"text": "CU$TOMER TEST", "confidence": 0.95, "source": "regional_fallback"})
     fields = extract_tradenet_fields([*lines, crop, noisy])
-    assert fields["importer"].value == "CUSTOMER TEST LLC"
+    assert fields["importer"].value == "CUSTOMER TEST LLC LIBYA"
 
 
 def test_missing_or_weak_cell_evidence_remains_null():
