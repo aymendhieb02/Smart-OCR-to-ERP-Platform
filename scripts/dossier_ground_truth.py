@@ -22,7 +22,8 @@ TARGET_FIELDS = {
     ),
     "ruspina": (
         "document_type", "document_family", "invoice_number", "invoice_date",
-        "referenced_invoice", "seller", "buyer", "customer", "currency", "total",
+        "referenced_invoice", "seller", "buyer", "customer", "client", "address", "currency", "total",
+        "total_amount_words", "iban", "bank", "swift",
         "description", "quantity", "unit", "unit_price", "line_total",
         "gross_weight", "net_weight", "number_of_bags", "delivery", "incoterm",
         "origin", "payment",
@@ -197,7 +198,7 @@ def _serialize_evidence(line: Any) -> dict[str, Any]:
 
 def _machine_target_values(document: dict[str, Any]) -> dict[str, Any]:
     fields = document["detected_fields"]
-    return {
+    values = {
         "document_type": document["document_type"],
         "document_family": document["document_family"],
         "invoice_number": fields.get("invoice_number"),
@@ -234,6 +235,14 @@ def _machine_target_values(document: dict[str, Any]) -> dict[str, Any]:
         "number_of_bags": None,
         "delivery": None,
     }
+    if document.get("document_family") == "ruspina_reinvoice_v1":
+        for name in ("referenced_invoice", "seller", "buyer", "customer", "client", "address",
+                     "total", "total_amount_words", "gross_weight", "net_weight", "number_of_bags",
+                     "delivery", "origin", "payment", "iban", "bank", "swift"):
+            detail = document.get("expanded_fields", {}).get(name)
+            if detail is not None:
+                values[name] = detail.get("value")
+    return values
 
 
 def _review_field(machine_value: Any, pages: list[int]) -> dict[str, Any]:

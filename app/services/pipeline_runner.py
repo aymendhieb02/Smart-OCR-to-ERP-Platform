@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 
 from app.core.config import settings
-from app.core.schemas import Candidate, DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
+from app.core.schemas import Candidate, DossierRelationship, DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
 from app.services.bbox_contract import apply_public_bbox_contract, bbox_loss_stage, count_public_ocr_boxes
 from app.services.document_classifier import classify_document
 from app.services.document_layout import analyze_document_layout
@@ -17,6 +17,7 @@ from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.ruspina_field_extractor import extract_ruspina_fields
+from app.services.dossier_reconciler import reconcile_dossier
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -59,6 +60,7 @@ class DossierProcessResult:
     document_preview: DocumentPreview
     ocr_engine: str
     timings: dict
+    relationships: tuple[DossierRelationship, ...] = ()
 
 
 def process_dossier_file(
@@ -192,6 +194,7 @@ def process_dossier_file(
         document_preview=document_preview,
         ocr_engine=ocr_result.engine,
         timings=timings,
+        relationships=reconcile_dossier(processed),
     )
 
 

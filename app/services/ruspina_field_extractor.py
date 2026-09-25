@@ -105,6 +105,12 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
         label, value = buyer
         fields["buyer"] = _detail(" ".join(value.text.split()), width, height, label, value)
         fields["customer"] = fields["buyer"]
+        fields["client"] = fields["buyer"]
+    address = _labelled_value(lines, width, height, r"^add?ress?\s*[:;]?\s*$", (0.0, 0.14, 0.25, 0.25),
+                              lambda line: _text_value(line, min_letters=3), max_x=0.60, max_gap_y=0.014)
+    if address:
+        label, value = address
+        fields["address"] = _detail(" ".join(value.text.split()), width, height, label, value)
 
     currency_lines = [line for line in lines if re.search(r"EUR\b|EURO\b", line.text, re.IGNORECASE)
                       and _in_region(line, width, height, (0.45, 0.20, 0.99, 0.68))]
@@ -121,6 +127,11 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
         selected = max(total_lines, key=lambda line: (line.confidence or 0) + (0.02 if line.source == "regional_fallback" else 0))
         fields["total"] = _detail(_money(selected.text), width, height, selected)
 
+    amount_words = _amount_words(lines, width, height)
+    if amount_words:
+        value, observations = amount_words
+        fields["total_amount_words"] = _detail(value, width, height, *observations)
+
     logistics = (
         ("gross_weight", r"^gro[s$5]s\s*weight\b", _weight_value),
         ("net_weight", r"^net\s*weight\b", _weight_value),
@@ -128,6 +139,9 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
         ("delivery", r"^delivery\b", _text_value),
         ("origin", r"^origin\b", _text_value),
         ("payment", r"^payment\b", _payment_value),
+        ("iban", r"^iban\s*[:;]?\s*$", _iban_value),
+        ("bank", r"^bank\s*[:;]?\s*$", _bank_value),
+        ("swift", r"^swift\s*[:;]?\s*$", _swift_value),
     )
     for name, pattern, parser in logistics:
         pair = _labelled_value(lines, width, height, pattern, (0.0, 0.59, 0.25, 0.85), parser,
@@ -284,6 +298,40 @@ def _text_value(line: OCRLine, *, min_letters: int = 3) -> str | None:
 def _payment_value(line: OCRLine) -> str | None:
     text = _text_value(line)
     return text if text and not re.search(r"\b(?:iban|swift|banque)\b", _plain(text)) else None
+
+
+def _iban_value(line: OCRLine) -> str | None:
+    value = " ".join(line.text.split())
+    compact = re.sub(r"\s", "", value)
+    return value if re.fullmatch(r"[A-Za-z]{2}\d{2}[A-Za-z0-9]{10,30}", compact) else None
+
+
+def _bank_value(line: OCRLine) -> str | None:
+    value = _text_value(line)
+    return value if value and _plain(value) != "bank transfer" else None
+
+
+def _swift_value(line: OCRLine) -> str | None:
+    value = line.text.strip()
+    return value if re.fullmatch(r"[A-Za-z0-9]{8}(?:[A-Za-z0-9]{3})?", value) and re.search(r"[A-Za-z]", value) else None
+
+
+def _amount_words(lines: list[OCRLine], width: int, height: int) -> tuple[str, tuple[OCRLine, ...]] | None:
+    labels = [line for line in lines if _in_region(line, width, height, (0.0, 0.58, 0.80, 0.68))
+              and re.match(r"^total\s*amount\s*[:;]?", _plain(line.text))]
+    for label in sorted(labels, key=lambda line: -(line.confidence or 0)):
+        match = re.match(r"^total\s*amount\s*[:;]?\s*(.*)$", label.text.strip(), re.IGNORECASE)
+        if match and _words_value(match.group(1)):
+            return match.group(1).strip(), (label,)
+        value = _right_value(label, lines, width, height,
+                             lambda line: _words_value(line.text), max_x=0.85, max_gap_y=0.014)
+        if value:
+            return value.text.strip(), (label, value)
+    return None
+
+
+def _words_value(text: str) -> bool:
+    return sum(char.isalpha() for char in text) >= 8 and _money(text) is None
 
 
 def _plain(text: str) -> str:

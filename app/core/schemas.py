@@ -432,6 +432,19 @@ class DossierReviewSummary(BaseModel):
     invalid_count: int = 0
 
 
+class DossierRelationship(BaseModel):
+    type: str
+    status: str
+    left_document_id: str | None = None
+    left_field: str
+    left_value: Any = None
+    right_document_id: str | None = None
+    right_field: str
+    right_value: Any = None
+    reason: str
+    confidence: float | None = None
+
+
 class ProcessDossierResponse(BaseModel):
     dossier_id: str
     source_file: str
@@ -441,5 +454,6 @@ class ProcessDossierResponse(BaseModel):
     document_preview: DocumentPreview
     page_classifications: list[DossierPageClassification] = Field(default_factory=list)
     logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)
+    relationships: list[DossierRelationship] = Field(default_factory=list)
     ocr_engine: str
     timings: dict[str, Any] = Field(default_factory=dict)
