@@ -113,6 +113,7 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
             document_preview=result.document_preview,
             page_classifications=[DossierPageClassification(**classification.__dict__) for classification in result.page_classifications],
             logical_documents=documents,
+            relationships=list(result.relationships),
             ocr_engine=result.ocr_engine,
             timings=result.timings,
         )

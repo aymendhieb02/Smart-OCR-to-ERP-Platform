@@ -293,6 +293,7 @@ def test_dossier_pipeline_scopes_ruspina_fields_to_its_logical_document(monkeypa
     engine = Engine()
     result = process_dossier_file(source, ocr_engine=engine)
     assert engine.run_calls == 1
+    assert len(result.relationships) == 5
     ruspina_doc = next(item for item in result.logical_documents if item.group.document_family == "ruspina_reinvoice_v1")
     response = ruspina_doc.response
     assert response.detected_fields.invoice_number == "202500001"
