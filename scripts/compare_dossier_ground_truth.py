@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.utils.helpers import parse_date
+
 
 class UnverifiedGroundTruthError(ValueError):
     pass
@@ -102,8 +104,8 @@ def _prediction_values(document: dict[str, Any]) -> dict[str, Any]:
         "document_family": document.get("document_family"),
         "invoice_number": first(identifiers.get("invoice_number"), fields.get("invoice_number")),
         "invoice_date": first(identifiers.get("invoice_date"), fields.get("invoice_date")),
-        "declaration_number": identifiers.get("declaration_number"),
-        "declaration_date": identifiers.get("declaration_date"),
+        "declaration_number": first(identifiers.get("declaration_number"), expanded_value("declaration_number")),
+        "declaration_date": first(identifiers.get("declaration_date"), expanded_value("declaration_date")),
         "seller": first(parties.get("seller"), parties.get("supplier"), fields.get("supplier_name")),
         "supplier": first(parties.get("supplier"), fields.get("supplier_name")),
         "buyer": first(parties.get("buyer"), parties.get("customer"), fields.get("customer_name")),
@@ -151,6 +153,11 @@ def _comparison(
     reviewed_cause: str | None = None,
     presence_status: str | None = None,
 ) -> dict[str, Any]:
+    if presence_status not in {"unclear", "illegible"} and field in {"invoice_date", "declaration_date"}:
+        normalized_actual = _normalized_date(actual)
+        normalized_expected = _normalized_date(expected)
+        if normalized_actual is not None and normalized_actual == normalized_expected:
+            return {"document": document_id, "field": field, "predicted": actual, "verified": expected, "result": "CORRECT", "cause": None}
     if presence_status in {"unclear", "illegible"}:
         result = "UNKNOWN"
     elif presence_status == "absent":
@@ -175,6 +182,13 @@ def _comparison(
     if result != "CORRECT":
         cause = reviewed_cause if reviewed_cause in ERROR_TAXONOMY else "UNKNOWN"
     return {"document": document_id, "field": field, "predicted": actual, "verified": expected, "result": result, "cause": cause}
+
+
+def _normalized_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    parsed = parse_date(str(value))
+    return parsed.isoformat() if parsed else None
 
 
 def _compare_rows(document_id: str, actual: list[Any], expected: list[Any], page: Any = None) -> list[dict[str, Any]]:

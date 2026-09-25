@@ -21,6 +21,17 @@ def _line(text: str, page: int) -> OCRLine:
     )
 
 
+def _positioned(text: str, page: int, x: float, y: float, *, width: int = 1200, height: int = 1600) -> OCRLine:
+    return OCRLine(
+        text=text,
+        confidence=0.9,
+        page_number=page,
+        bbox=BoundingBox(x1=x, y1=y, x2=x + 70, y2=y + 22),
+        page_width=width,
+        page_height=height,
+    )
+
+
 def test_deterministic_family_classification_uses_page_evidence():
     cases = [
         (_line("SOCIETE DES CIMENTS D'ENFIDHA INVOICE", 1), "ciments_enfidha_invoice_v1"),
@@ -65,6 +76,62 @@ def test_customs_masthead_overrides_supplier_name_on_same_page():
 
     assert result.document_type == "customs_declaration"
     assert result.document_family == "customs_tradenet_v1"
+
+
+def test_noisy_tradenet_classification_uses_multiple_header_signals():
+    lines = [
+        _positioned("TUNETRADNTm DaMach", 3, 250, 35),
+        _positioned("Exportaleur", 3, 260, 90),
+        _positioned("importateut", 3, 260, 205),
+        _positioned("Déclaration", 3, 650, 70),
+        _positioned("123456", 3, 700, 160),
+        _positioned("04-02-2025", 3, 820, 160),
+    ]
+
+    result = classify_page(lines, 3)
+
+    assert result.document_type == "customs_declaration"
+    assert result.document_family == "customs_tradenet_v1"
+    assert {"tradenet_masthead", "exporter_label", "importer_label", "paired_header_values"}.issubset(result.matched_anchors)
+
+
+def test_weak_tradenet_evidence_remains_unknown():
+    result = classify_page([_positioned("tradnt", 1, 100, 60)], 1)
+
+    assert result.document_type == "unknown"
+    assert result.document_family is None
+
+
+def test_customs_header_structure_beats_lone_invoice_family_anchor():
+    lines = [
+        _positioned("SOTACIB KASSERINE CIMENT BLANC", 3, 300, 250),
+        _positioned("TUNETRADNTm DaMach", 3, 250, 35),
+        _positioned("Exportaleur", 3, 260, 90),
+        _positioned("Importateur", 3, 260, 205),
+        _positioned("Dcaratoa", 3, 650, 70),
+        _positioned("123456", 3, 700, 160),
+        _positioned("04-02-2025", 3, 820, 160),
+    ]
+
+    result = classify_page(lines, 3)
+
+    assert result.document_type == "customs_declaration"
+    assert result.document_family == "customs_tradenet_v1"
+
+
+def test_multi_signal_customs_structure_can_keep_family_unknown():
+    lines = [
+        _positioned("Exportateur", 2, 260, 90),
+        _positioned("Importateur", 2, 260, 205),
+        _positioned("Déclaration", 2, 650, 70),
+        _positioned("123456", 2, 700, 160),
+        _positioned("04-02-2025", 2, 820, 160),
+    ]
+
+    result = classify_page(lines, 2)
+
+    assert result.document_type == "customs_declaration"
+    assert result.document_family is None
 
 
 def test_classify_pages_includes_page_without_ocr_lines():

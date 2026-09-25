@@ -195,3 +195,28 @@ def test_comparator_marks_unclear_null_as_unknown_and_maps_custom_fields():
     assert values["exporter"] == "SUPPLIER_TEST"
     unclear = _comparison("doc_test", "optional_test", None, None, "identifiers", presence_status="unclear")
     assert unclear["result"] == "UNKNOWN"
+
+
+def test_comparator_reads_trade_net_identifiers_from_expanded_fields():
+    from scripts.compare_dossier_ground_truth import _prediction_values
+
+    values = _prediction_values({
+        "document_type": "customs_declaration",
+        "document_family": "customs_tradenet_v1",
+        "identifiers": {},
+        "expanded_fields": {
+            "declaration_number": {"value": "DECL-TEST-02"},
+            "declaration_date": {"value": "2026-02-04"},
+        },
+    })
+
+    assert values["declaration_number"] == "DECL-TEST-02"
+    assert values["declaration_date"] == "2026-02-04"
+
+
+def test_comparator_normalizes_declaration_date_formats():
+    from scripts.compare_dossier_ground_truth import _comparison
+
+    comparison = _comparison("doc_test", "declaration_date", "04.02.2026", "2026-02-04", "identifiers")
+
+    assert comparison["result"] == "CORRECT"
