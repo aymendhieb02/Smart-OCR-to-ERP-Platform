@@ -60,6 +60,8 @@ def _form(*, width=1190, height=1684, dx=0, dy=0, invoice_heading="INVOICE N* 20
         item("TN9999999999999999999999", 0.35, 0.78, box_width=230),
         item("BANK:", 0.10, 0.80),
         item("TEST BANK", 0.31, 0.80),
+        item("SWIFT:", 0.10, 0.82),
+        item("TSTBTNTT", 0.31, 0.82),
         item("ALPHA IMPORT EXPORT", 0.45, 0.925, box_width=210, confidence=0.98),
         item("National ID: 123456789 - Tel: 999999999", 0.45, 0.95, box_width=440),
     ]
@@ -115,6 +117,9 @@ def test_seller_prefers_clear_local_footer_and_buyer_uses_client_row_not_address
     assert result.fields["buyer"].value == "BETA CUSTOMER LLC"
     assert result.fields["customer"].value == "BETA CUSTOMER LLC"
     assert "CITY-COUNTRY" not in result.fields["buyer"].evidence_text
+    assert result.fields["client"].value == "BETA CUSTOMER LLC"
+    assert result.fields["address"].value == "CITY-COUNTRY"
+    assert result.fields["address"].bbox != result.fields["client"].bbox
 
 
 def test_seller_can_use_top_letterhead_without_footer_but_never_invents_a_name():
@@ -130,6 +135,20 @@ def test_currency_total_and_table_prices_have_separate_printed_evidence():
     assert result.fields["total"].evidence_text == "12 500.00EUR"
     assert result.fields["unit_price"].value == 50.0
     assert result.fields["line_total"].value == 12500.0
+    assert result.fields["total_amount_words"].value == "TWELVE THOUSAND FIVE HUNDRED EURO"
+    assert result.fields["total"].value != result.fields["total_amount_words"].value
+
+
+def test_amount_words_split_label_and_value_are_associated_by_row_not_ocr_order():
+    lines = _form()
+    label = next(line for line in lines if line.text.startswith("TOTAL AMOUNT:"))
+    label.text = "TOTAL AMOUNT:"
+    label.bbox.x1 = 0.10 * 1190
+    label.bbox.x2 = 0.25 * 1190
+    lines.append(_line("TWELVE THOUSAND FIVE HUNDRED EURO", 0.48, 0.63, box_width=320))
+    result = _extract(list(reversed(lines)))
+    assert result.fields["total_amount_words"].value == "TWELVE THOUSAND FIVE HUNDRED EURO"
+    assert result.fields["total_amount_words"].evidence_text.startswith("TOTAL AMOUNT:\n")
 
 
 def test_unrelated_money_line_outside_total_cell_cannot_override_total():
@@ -172,6 +191,29 @@ def test_delivery_origin_payment_and_incoterm_do_not_use_bank_iban():
     assert result.fields["origin"].value == "TESTLAND"
     assert result.fields["payment"].value == "BANK TRANSFER"
     assert "IBAN" not in result.fields["payment"].evidence_text
+    assert result.fields["iban"].value == "TN9999999999999999999999"
+    assert result.fields["bank"].value == "TEST BANK"
+    assert result.fields["swift"].value == "TSTBTNTT"
+    assert result.fields["bank"].value != result.fields["payment"].value
+    assert result.fields["iban"].value != result.fields["swift"].value
+    assert result.fields["invoice_number"].value != result.fields["swift"].value
+
+
+def test_missing_or_invalid_payment_details_are_not_invented():
+    lines = [line for line in _form() if line.text not in {"TEST BANK", "TSTBTNTT", "TN9999999999999999999999"}]
+    result = _extract(lines)
+    assert not {"iban", "bank", "swift"} & result.fields.keys()
+    assert result.fields["payment"].value == "BANK TRANSFER"
+
+
+def test_lower_row_values_are_selected_by_geometry_even_when_ocr_order_is_reversed():
+    result = _extract(list(reversed(_form())))
+    for name, expected in {"address": "CITY-COUNTRY", "iban": "TN9999999999999999999999",
+                           "bank": "TEST BANK", "swift": "TSTBTNTT"}.items():
+        assert result.fields[name].value == expected
+        assert result.fields[name].page == 2
+        assert result.fields[name].bbox is not None
+        assert "full_page" in result.fields[name].source
 
 
 def test_single_table_row_uses_columns_and_preserves_source_description():
@@ -211,6 +253,8 @@ def test_normalized_geometry_preserves_values_bbox_page_confidence_and_source(wi
     result = _extract(lines, width=width, height=height)
     assert result.fields["invoice_number"].value == "202500001"
     assert result.fields["buyer"].value == "BETA CUSTOMER LLC"
+    assert result.fields["address"].value == "CITY-COUNTRY"
+    assert result.fields["swift"].value == "TSTBTNTT"
     assert result.line_items[0].quantity == 250.0
     assert result.fields["invoice_number"].bbox is not None
     assert result.fields["invoice_number"].page == 2
@@ -254,6 +298,12 @@ def test_dossier_pipeline_scopes_ruspina_fields_to_its_logical_document(monkeypa
     assert response.detected_fields.invoice_number == "202500001"
     assert response.detected_fields.customer_name == "BETA CUSTOMER LLC"
     assert response.expanded_fields["referenced_invoice"].value == "7700000012"
+    assert response.expanded_fields["client"].value == "BETA CUSTOMER LLC"
+    assert response.expanded_fields["address"].value == "CITY-COUNTRY"
+    assert response.expanded_fields["total_amount_words"].value == "TWELVE THOUSAND FIVE HUNDRED EURO"
+    assert response.expanded_fields["iban"].value == "TN9999999999999999999999"
+    assert response.expanded_fields["bank"].value == "TEST BANK"
+    assert response.expanded_fields["swift"].value == "TSTBTNTT"
     assert response.expanded_fields["total"].value == 12500.0
     assert response.detected_fields.amount_ht is None
     assert response.detected_fields.tva_amount is None
