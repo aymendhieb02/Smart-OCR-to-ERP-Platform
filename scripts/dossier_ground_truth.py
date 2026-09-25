@@ -62,6 +62,10 @@ def serialize_machine_output(
     for index, item in enumerate(result.logical_documents, start=1):
         response = item.response
         fields = response.detected_fields.model_dump(mode="json")
+        ruspina = item.group.document_family == "ruspina_reinvoice_v1"
+        def expanded_value(name: str) -> Any:
+            detail = response.expanded_fields.get(name)
+            return detail.value if detail else None
         documents.append({
             "logical_document_id": item.group.group_id,
             "document_index": index,
@@ -94,7 +98,8 @@ def serialize_machine_output(
                 "amount_ttc": fields.get("amount_ttc"),
                 "invoice_value": None,
             },
-            "line_items": fields.get("line_items", []),
+            "line_items": ([line.model_dump(mode="json") for line in response.all_line_items]
+                           if ruspina else fields.get("line_items", [])),
             "validation": response.validation.model_dump(mode="json"),
             "confidence": {
                 "overall": response.validation.confidence,
@@ -104,6 +109,13 @@ def serialize_machine_output(
             "erp_readiness": response.erp_readiness,
             "evidence": [_serialize_evidence(line) for line in response.all_ocr_blocks],
         })
+        if ruspina:
+            documents[-1]["parties"].update({
+                "seller": expanded_value("seller"),
+                "buyer": expanded_value("buyer"),
+            })
+            documents[-1]["identifiers"]["referenced_invoice"] = expanded_value("referenced_invoice")
+            documents[-1]["financial"]["total"] = expanded_value("total")
     return {
         "metadata": {
             "source_file": source_path.name,

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 import time
 
 from app.core.config import settings
-from app.core.schemas import DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
+from app.core.schemas import Candidate, DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
 from app.services.bbox_contract import apply_public_bbox_contract, bbox_loss_stage, count_public_ocr_boxes
 from app.services.document_classifier import classify_document
 from app.services.document_layout import analyze_document_layout
@@ -15,6 +16,7 @@ from app.services.extraction_quality import apply_extraction_quality_gate, build
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
+from app.services.ruspina_field_extractor import extract_ruspina_fields
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -308,11 +310,49 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
                 }
                 timings.update(getattr(ocr_engine, "last_timings", {}))
     timings["field_extraction"] = round(time.perf_counter() - stage_started, 4)
+    ruspina = None
+    if document_family == "ruspina_reinvoice_v1":
+        ruspina_started = time.perf_counter()
+        ruspina = extract_ruspina_fields(
+            ocr_result.lines,
+            document_family=document_family,
+            page_dimensions=_physical_page_dimensions(document, physical_page_numbers),
+        )
+        for source_name, target_name in (
+            ("invoice_number", "invoice_number"), ("invoice_date", "invoice_date"),
+            ("seller", "supplier_name"), ("buyer", "customer_name"), ("currency", "currency"),
+        ):
+            detail = ruspina.fields.get(source_name)
+            if not detail or detail.value is None:
+                continue
+            setattr(fields, target_name, date.fromisoformat(detail.value) if target_name == "invoice_date" else detail.value)
+            field_confidences[target_name] = detail.confidence or 0.0
+            candidates.setdefault(target_name, []).append(Candidate(
+                field=target_name, value=detail.value, normalized_value=detail.normalized_value,
+                score=detail.confidence or 0.0, confidence=detail.confidence,
+                source=detail.source or "RUSPINA positioned OCR", page=detail.page,
+                line_index=detail.line_index, bbox=detail.bbox,
+                page_width=detail.page_width, page_height=detail.page_height,
+                coordinate_space=detail.coordinate_space, evidence_text=detail.evidence_text,
+            ))
+        if ruspina.line_items:
+            fields.line_items = ruspina.line_items
+        timings["ruspina_field_extraction"] = round(time.perf_counter() - ruspina_started, 4)
     stage_started = time.perf_counter()
     with _timer_stage(timer, "financial_validation", part="quality_gate"):
         quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
         fields = quality_gate.sanitized_fields
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
+    if ruspina is not None:
+        expanded_fields.update(ruspina.fields)
+        for source_name, target_name in (("seller", "supplier_name"), ("buyer", "customer_name")):
+            detail = ruspina.fields.get(source_name)
+            if detail and getattr(fields, target_name) == detail.value:
+                expanded_fields[target_name] = detail
+        extraction_debug["ruspina_field_extraction"] = {
+            "source_fields": sorted(ruspina.fields),
+            "table_rows": len(ruspina.line_items),
+        }
     if fixed_customs_form or document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
         page_dimensions = _physical_page_dimensions(document, physical_page_numbers)
         tradenet_fields = extract_tradenet_fields(ocr_result.lines, page_dimensions=page_dimensions)
