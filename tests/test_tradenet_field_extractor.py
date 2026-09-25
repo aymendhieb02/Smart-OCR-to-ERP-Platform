@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import numpy as np
 import pytest
 
@@ -397,15 +399,39 @@ def test_single_line_parties_and_short_company_name_continuation():
 def test_ptfn_rate_and_printed_customs_total_use_three_distinct_cells():
     fields = extract_tradenet_fields(_business_form())
 
-    assert fields["ptfn_amount"].value == 12345.0
+    assert fields["ptfn_amount"].value == "12345.000"
+    assert fields["ptfn_amount"].normalized_value == Decimal("12345.000")
     assert fields["ptfn_amount"].evidence_text == "12345.000"
-    assert fields["currency_conversion_rate"].value == 3.1234
+    assert fields["currency_conversion_rate"].value == "3.1234000"
     assert fields["currency_conversion_rate"].evidence_text == "3.1234000"
-    assert fields["customs_total_value_tnd"].value == 38548.75
+    assert fields["customs_total_value_tnd"].value == "38548.750"
     assert fields["customs_total_value_tnd"].evidence_text == "38548.750"
     assert fields["ptfn_amount"].bbox.y1 < fields["currency_conversion_rate"].bbox.y1
     assert fields["customs_total_value_tnd"].bbox.x1 > fields["currency_conversion_rate"].bbox.x1
     assert all(fields[name].source.startswith("TradeNet") for name in ("ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"))
+
+
+@pytest.mark.parametrize("field,source_text", [
+    ("ptfn_amount", "52000.000"),
+    ("ptfn_amount", "0.500"),
+    ("ptfn_amount", "10.000"),
+    ("ptfn_amount", "0.000"),
+    ("currency_conversion_rate", "3.2842000"),
+    ("currency_conversion_rate", "0.500"),
+    ("customs_total_value_tnd", "170778.400"),
+    ("customs_total_value_tnd", "10.000"),
+    ("customs_total_value_tnd", "0.000"),
+])
+def test_financial_display_keeps_source_decimal_lexeme(field, source_text):
+    lines = _business_form()
+    old_text = {"ptfn_amount": "12345.000", "currency_conversion_rate": "3.1234000",
+                "customs_total_value_tnd": "38548.750"}[field]
+    next(line for line in lines if line.text == old_text).text = source_text
+    detail = extract_tradenet_fields(lines)[field]
+    assert detail.value == source_text
+    assert detail.display_value == source_text
+    assert detail.machine_value == source_text
+    assert detail.normalized_value == Decimal(source_text)
 
 
 def test_form_cells_scale_and_shift_without_fixed_raster_coordinates():
@@ -413,9 +439,9 @@ def test_form_cells_scale_and_shift_without_fixed_raster_coordinates():
 
     assert fields["exporter"].value == "SUPPLIER TEST LTD 1 TEST STREET"
     assert fields["importer"].value == "CUSTOMER TEST LLC LIBYA"
-    assert fields["ptfn_amount"].value == 12345.0
-    assert fields["currency_conversion_rate"].value == 3.1234
-    assert fields["customs_total_value_tnd"].value == 38548.75
+    assert fields["ptfn_amount"].value == "12345.000"
+    assert fields["currency_conversion_rate"].value == "3.1234000"
+    assert fields["customs_total_value_tnd"].value == "38548.750"
     assert fields["ptfn_amount"].page_width == 2400
     assert fields["ptfn_amount"].bbox.x1 > 28
 
@@ -434,9 +460,9 @@ def test_header_alignment_tracks_a_form_shifted_up_within_scan():
     fields = extract_tradenet_fields(lines, page_dimensions={3: (1200, 1600)})
     assert fields["declaration_type"].value == "E"
     assert fields["exporter"].value == "SUPPLIER TEST LTD 1 TEST STREET"
-    assert fields["ptfn_amount"].value == 12345.0
-    assert fields["currency_conversion_rate"].value == 3.1234
-    assert fields["customs_total_value_tnd"].value == 38548.75
+    assert fields["ptfn_amount"].value == "12345.000"
+    assert fields["currency_conversion_rate"].value == "3.1234000"
+    assert fields["customs_total_value_tnd"].value == "38548.750"
 
 
 def test_type_cell_accepts_short_token_but_rejects_letter_elsewhere():
@@ -457,7 +483,7 @@ def test_full_page_targeted_disagreement_preserves_observations_and_chooses_cell
     fields = extract_tradenet_fields(merged.lines)
 
     assert {line.text for line in merged.lines if line.bbox == original.bbox} == {"54321.000", "12345.000"}
-    assert fields["ptfn_amount"].value == 12345.0
+    assert fields["ptfn_amount"].value == "12345.000"
     assert fields["ptfn_amount"].source.endswith("regional_fallback)")
 
 
@@ -468,7 +494,7 @@ def test_dedicated_total_cell_breaks_near_confidence_tie():
     broad.confidence = 0.982
     narrow = broad.model_copy(update={"text": "38548.760", "confidence": 0.981, "source": "tradenet_customs_total"})
     fields = extract_tradenet_fields([*lines, narrow])
-    assert fields["customs_total_value_tnd"].value == 38548.76
+    assert fields["customs_total_value_tnd"].value == "38548.760"
     assert fields["customs_total_value_tnd"].evidence_text == "38548.760"
     assert fields["customs_total_value_tnd"].source.endswith("tradenet_customs_total)")
 
