@@ -42,11 +42,12 @@ def test_expanded_fields_and_field_boxes_from_candidates():
     fields = ExtractedInvoiceFields(invoice_number="FAC-1", amount_ttc=123.76)
     bbox = BoundingBox(x1=1, y1=2, x2=3, y2=4)
     candidates = {
-        "invoice_number": [Candidate(field="invoice_number", value="FAC-1", score=0.9, source="test", page=1, line_index=2, bbox=bbox)]
+        "invoice_number": [Candidate(field="invoice_number", value="FAC-1", score=0.9, source="test", page=1, line_index=2, bbox=bbox, evidence_text="Invoice No FAC-1")]
     }
     expanded = build_expanded_fields(fields, candidates, {"invoice_number": 0.9}, "Email: demo@example.com")
     boxes = build_field_boxes(expanded)
     assert expanded["invoice_number"].bbox == bbox
+    assert expanded["invoice_number"].evidence_text == "Invoice No FAC-1"
     assert expanded["supplier_email"].value == "demo@example.com"
     assert boxes[0].field == "invoice_number"
 

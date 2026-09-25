@@ -228,31 +228,18 @@ def _recover_consistent_totals(
     tva_candidates = _numeric_candidate_values(candidates.get("tva_amount", []), fields.tva_amount)
     ttc_candidates = _numeric_candidate_values(candidates.get("amount_ttc", []), fields.amount_ttc)
     line_sum = _line_ht_sum(line_items)
-    if line_sum is not None and fields.amount_ht is None:
-        ht_candidates.append((line_sum, 0.82, "validated line total sum"))
-    if fields.tax_rate is not None and line_sum is not None and (fields.amount_ht is None or fields.tva_amount is None):
-        inferred_tva = round(line_sum * fields.tax_rate / 100, 3)
-        tva_candidates.append((inferred_tva, 0.76, "tax rate applied to line total sum"))
-        ttc_candidates.append((round(line_sum + inferred_tva, 3), 0.76, "line sum plus inferred tax"))
-    if not ht_candidates or not ttc_candidates:
+    # This gate may reconcile explicitly extracted values, but it must not turn
+    # line sums or tax rates into source fields absent from the document.
+    if not ht_candidates or not tva_candidates or not ttc_candidates:
         return None
-    if not tva_candidates:
-        tva_candidates = [(None, 0.0, "missing")]
     best: tuple[float, float | None, float | None, float | None, str] | None = None
     for ht, ht_score, ht_source in ht_candidates:
         for tva, tva_score, tva_source in tva_candidates:
             for ttc, ttc_score, ttc_source in ttc_candidates:
                 if ht is None or ttc is None:
                     continue
-                if tva is None:
-                    expected_tva = round(ttc - ht, 3)
-                    if expected_tva < 0:
-                        continue
-                    tva_value = expected_tva
-                    tax_score = 0.25
-                else:
-                    tva_value = tva
-                    tax_score = tva_score
+                tva_value = tva
+                tax_score = tva_score
                 expected = round(ht + tva_value, 3)
                 mismatch = abs(expected - ttc)
                 if mismatch > max(0.05, abs(ttc) * 0.003):

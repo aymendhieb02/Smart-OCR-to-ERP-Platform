@@ -40,6 +40,7 @@ def build_expanded_fields(
             page=candidate.page if candidate else None,
             line_index=candidate.line_index if candidate else None,
             source=candidate.source if candidate else "field selection",
+            evidence_text=candidate.evidence_text if candidate else None,
         )
 
     for field_name, pattern in EXTRA_PATTERNS.items():

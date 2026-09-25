@@ -7,7 +7,7 @@ def tax_candidates_from(source_text: str):
     return collect_field_candidates(source_text).get("tax_rate", [])
 
 
-def test_stacked_totals_keeps_plausible_inferred_tax_rate():
+def test_unlabeled_numeric_cluster_does_not_infer_financial_fields():
     candidates = tax_candidates_from("""
 Total
 $100.00
@@ -15,10 +15,7 @@ $20.00
 $120.00
 """)
 
-    stacked = [candidate for candidate in candidates if candidate.source == "stacked totals inferred tax rate"]
-    assert stacked
-    assert stacked[0].value == 20.0
-    assert stacked[0].score < 0.80
+    assert candidates == []
 
 
 def test_stacked_totals_drops_implausible_inferred_tax_rate():
@@ -29,48 +26,41 @@ $49.00
 $50.00
 """)
 
-    assert not [candidate for candidate in candidates if candidate.source == "stacked totals inferred tax rate"]
+    assert not candidates
     assert all(candidate.value != 4900 for candidate in candidates)
 
 
 
-def test_summary_totals_ocr_text_selects_consistent_financial_fields():
+def test_explicit_summary_labels_select_consistent_financial_fields():
     fields, _candidates, _confidences, _debug = extract_with_candidates("""
-SUMMARY
-VAT
-Gross worth
-74 237,40
-7 423,74
-81 661,14
-Total
-$ 74 237,40
-$ 7 423,74
-$ 81 661,14
+Subtotal HT 1 000,00
+Tax Amount 200,00
+Total Including All taxes 1 200,00 EUR
 """)
 
-    assert fields.amount_ht == 74237.4
-    assert fields.tva_amount == 7423.74
-    assert fields.amount_ttc == 81661.14
-    assert fields.tax_rate == 10.0
+    assert fields.amount_ht == 1000.0
+    assert fields.tva_amount == 200.0
+    assert fields.amount_ttc == 1200.0
+    assert fields.tax_rate == 20.0
 
 
 def test_inconsistent_selected_totals_are_repaired_from_consistent_summary_candidates():
     selected = {
-        "amount_ht": Candidate(field="amount_ht", value=81661.14, score=0.91, source="bad spatial candidate"),
-        "tva_amount": Candidate(field="tva_amount", value=26, score=0.91, source="bad spatial candidate"),
-        "amount_ttc": Candidate(field="amount_ttc", value=81661.14, score=0.91, source="bad spatial candidate"),
-        "tax_rate": Candidate(field="tax_rate", value=0.03, score=0.91, source="bad inferred candidate"),
+        "amount_ht": Candidate(field="amount_ht", value=950.0, score=0.30, source="bad spatial candidate"),
+        "tva_amount": Candidate(field="tva_amount", value=50.0, score=0.30, source="bad spatial candidate"),
+        "amount_ttc": Candidate(field="amount_ttc", value=1150.0, score=0.30, source="bad spatial candidate"),
+        "tax_rate": Candidate(field="tax_rate", value=0.03, score=0.30, source="bad inferred candidate"),
     }
     candidates = {
-        "amount_ht": [selected["amount_ht"], Candidate(field="amount_ht", value=74237.4, score=0.62, source="stacked totals first amount")],
-        "tva_amount": [selected["tva_amount"], Candidate(field="tva_amount", value=7423.74, score=0.62, source="stacked totals middle amount")],
-        "amount_ttc": [selected["amount_ttc"], Candidate(field="amount_ttc", value=81661.14, score=0.68, source="stacked totals rightmost/gross amount")],
+        "amount_ht": [selected["amount_ht"], Candidate(field="amount_ht", value=1000.0, score=0.92, source="subtotal HT explicit label")],
+        "tva_amount": [selected["tva_amount"], Candidate(field="tva_amount", value=200.0, score=0.91, source="Tax Amount explicit label")],
+        "amount_ttc": [selected["amount_ttc"], Candidate(field="amount_ttc", value=1200.0, score=0.95, source="Total TTC explicit label")],
         "tax_rate": [selected["tax_rate"]],
     }
 
     _repair_inconsistent_selected_totals(selected, candidates)
 
-    assert selected["amount_ht"].value == 74237.4
-    assert selected["tva_amount"].value == 7423.74
-    assert selected["amount_ttc"].value == 81661.14
-    assert selected["tax_rate"].value == 10.0
+    assert selected["amount_ht"].value == 1000.0
+    assert selected["tva_amount"].value == 200.0
+    assert selected["amount_ttc"].value == 1200.0
+    assert selected["tax_rate"].value == 20.0

@@ -5,7 +5,7 @@ from typing import Any
 from app.core.schemas import Candidate, DocumentClassification, ExtractedInvoiceFields, LineItem, OCRLine
 from app.services.correction_store import boost_candidates_from_memory
 from app.services.confidence_normalizer import normalize_confidence
-from app.services.document_layout import analyze_document_layout, build_table_extraction_debug, reconstruct_tables, group_ocr_lines
+from app.services.document_layout import analyze_document_layout, build_table_extraction_debug, group_ocr_lines
 from app.services.graph_field_extractor import add_graph_field_candidates, build_graph_debug
 from app.services.line_item_extractor import extract_line_items
 from app.services.party_resolver import party_adjusted_score, resolve_parties
@@ -35,6 +35,24 @@ BAD_SUPPLIER_WORDS = (
     "ref", "reference", "tax id", "tax", "seller", "supplier", "vendor", "bill to",
 )
 NUMBER_LABEL = r"(?:number|num(?:e|\u00e9)ro|numero|no\.?|n\.|n\s*(?:[\u00b0\u00ba]|o)?|#)"
+
+TTC_LABEL_PATTERNS = (
+    r"\btotal\s*(?:including\s*(?:all\s*)?tax(?:es)?|incl\.?\s*(?:all\s*)?tax(?:es)?)\b",
+    r"\btotal\s*TTC\b", r"\bmontant\s*TTC\b", r"\btotal\s*a\s*payer\b",
+    r"\bnet\s*a\s*payer\b", r"\bgrand\s*total\b", r"\binvoice\s*total\b",
+    r"\btotal\s*(?:amount|facture)\b", r"\bamount\s*(?:including|incl\.?)\s*tax(?:es)?\b",
+    r"\bbalance\s*due\b", r"\btotal\s*due\b",
+)
+HT_LABEL_PATTERNS = (
+    r"\bsous\s*[- ]?total\s*HT\b", r"\btotal\s*HT\b", r"\bmontant\s*HT\b",
+    r"\bbase\s*HT\b", r"\bhors\s*tax(?:e|es)\b", r"\bnet\s*HT\b",
+    r"\bsubtotal\b", r"\bsub\s*total\b", r"\bamount\s*excl\.?\s*tax\b",
+    r"\bamount\s*excluding\s*tax\b", r"\btaxable\s*amount\b",
+)
+TAX_AMOUNT_LABEL_PATTERNS = (
+    r"\bmontant\s*(?:TVA|VAT)\b", r"\b(?:sales\s*)?tax\s*amount\b",
+    r"\btotal\s*tax\b", r"\b(?:TVA|VAT)\s*\(?\s*\d{1,2}(?:[,.]\d{1,2})?\s*%\s*\)?",
+)
 
 
 def extract_invoice_fields(text: str) -> ExtractedInvoiceFields:
@@ -196,6 +214,7 @@ def collect_field_candidates(
     with _timer_stage(timing_recorder, "totals_extraction"):
         _add_stacked_totals_candidates(add, text, ocr_blocks or [])
         _add_summary_table_candidates(add, ocr_blocks or [])
+        _add_label_anchored_financial_candidates(add, ocr_blocks or [])
     with _timer_stage(timing_recorder, "supplier_extraction", source="ocr_blocks"):
         _add_party_candidates_from_blocks(add, ocr_blocks or [])
         _add_safe_party_region_candidates(add, ocr_blocks or [])
@@ -266,34 +285,17 @@ def _extract_currency(text: str) -> str | None:
 
 
 def _extract_amount_ht(text: str) -> float | None:
-    value = _amount_after_label(text, [
-        r"sous\s*[- ]?\s*total\s*HT", r"total\s*HT", r"montant\s*HT",
-        r"base\s*HT", r"hors\s*taxe", r"hors\s*taxes", r"net\s*HT",
-        r"subtotal", r"sub\s*total", r"net\s*worth", r"net", r"amount\s*excl\.?\s*tax",
-        r"amount\s*excluding\s*tax", r"taxable\s*amount", r"net\s*amount",
-        r"untaxed\s*amount", r"before\s*tax",
-    ])
+    value = _amount_after_label(text, [*HT_LABEL_PATTERNS, r"net\s*worth", r"net\s*amount", r"untaxed\s*amount", r"before\s*tax"])
     return parse_amount(value)
 
 
 def _extract_tva_amount(text: str) -> float | None:
-    value = _amount_after_label(text, [
-        r"TVA\s*\(?\s*\d{1,2}(?:[,.]\d{1,2})?\s*%\s*\)?",
-        r"VAT\s*\(?\s*\d{1,2}(?:[,.]\d{1,2})?\s*%\s*\)?",
-        r"montant\s*TVA", r"taxe\s*sur\s*la\s*valeur\s*ajoutee",
-        r"TVA", r"VAT", r"tax\s*amount", r"sales\s*tax", r"total\s*tax",
-    ], prefer_last=True)
+    value = _amount_after_label(text, [*TAX_AMOUNT_LABEL_PATTERNS, r"taxe\s*sur\s*la\s*valeur\s*ajoutee"], prefer_last=True)
     return parse_amount(value)
 
 
 def _extract_amount_ttc(text: str) -> float | None:
-    value = _amount_after_label(text, [
-        r"total\s*TTC", r"montant\s*TTC", r"total\s*a\s*payer",
-        r"net\s*a\s*payer", r"montant\s*total", r"total\s*facture",
-        r"total\s*net", r"total\s*amount", r"grand\s*total",
-        r"amount\s*incl\.?\s*tax", r"amount\s*including\s*tax",
-        r"balance\s*due", r"amount\s*due", r"gross\s*worth", r"gross", r"invoice\s*total",
-    ], prefer_last=True)
+    value = _amount_after_label(text, [*TTC_LABEL_PATTERNS, r"montant\s*total", r"total\s*net", r"amount\s*due", r"gross\s*worth"], prefer_last=True)
     if value is None:
         value = first_match([
             rf"\(({AMOUNT_VALUE})\s*(?:TND|EUR|USD|GBP|MAD|DZD|DT)\)",
@@ -477,7 +479,7 @@ def _add_line_candidates(add, line: str, line_plain: str, line_index: int, block
     if any(key in labels for key in ("tva", "vat", "tax amount", "montant tva", "ÃƒËœÃ‚Â¶ÃƒËœÃ‚Â±Ãƒâ„¢Ã…Â ÃƒËœÃ‚Â¨ÃƒËœÃ‚Â©")):
         add("tva_amount", _last_non_percent_amount(line), 0.82, "amount near tax label", block)
         add("tax_rate", parse_amount(first_match([r"(\d{1,2}(?:[,.]\d{1,2})?)\s*%"], line)), 0.78, "tax rate percent", block)
-    is_total_line = any(key in labels for key in ("total ttc", "montant ttc", "grand total", "amount due", "ttc", "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾ÃƒËœÃ‚Â¥ÃƒËœÃ‚Â¬Ãƒâ„¢Ã¢â‚¬Â¦ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾Ãƒâ„¢Ã…Â ", "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾Ãƒâ„¢Ã¢â‚¬Â¦ÃƒËœÃ‚Â¬Ãƒâ„¢Ã¢â‚¬Â¦Ãƒâ„¢Ã‹â€ ÃƒËœÃ‚Â¹"))
+    is_total_line = any(key in labels for key in ("total ttc", "montant ttc", "grand total", "amount due", "total including", "ttc", "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾ÃƒËœÃ‚Â¥ÃƒËœÃ‚Â¬Ãƒâ„¢Ã¢â‚¬Â¦ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾Ãƒâ„¢Ã…Â ", "ÃƒËœÃ‚Â§Ãƒâ„¢Ã¢â‚¬Å¾Ãƒâ„¢Ã¢â‚¬Â¦ÃƒËœÃ‚Â¬Ãƒâ„¢Ã¢â‚¬Â¦Ãƒâ„¢Ã‹â€ ÃƒËœÃ‚Â¹"))
     if is_total_line:
         add("amount_ttc", _last_amount(line), 0.90, "amount near TTC/total label", block)
 
@@ -596,33 +598,6 @@ def _add_stacked_totals_candidates(add, text: str, blocks: list[OCRLine]) -> Non
         add("tax_rate", labeled_totals.get("tax_rate"), 0.84, "semantic totals cluster tax rate")
     if labeled_totals.get("currency") is not None:
         add("currency", labeled_totals.get("currency"), 0.84, "semantic totals cluster currency")
-    lines = [_clean_name(line) for line in text.splitlines() if _clean_name(line)]
-    for index, line in enumerate(lines):
-        label = strip_accents(line).lower()
-        if label not in {"total", "totals"} and not any(key in label for key in ("net worth", "gross worth", "total htva", "total h.t")):
-            continue
-        window = " ".join(lines[index + 1:index + 8])
-        amounts = _money_values(window)
-        if len(amounts) >= 3:
-            add("amount_ht", amounts[0], 0.62, "stacked totals first amount")
-            add("tva_amount", amounts[1], 0.62, "stacked totals middle amount")
-            add("amount_ttc", amounts[-1], 0.68, "stacked totals rightmost/gross amount")
-            inferred_tax_rate = _infer_plausible_tax_rate(amounts[0], amounts[1])
-            if inferred_tax_rate is not None:
-                add("tax_rate", inferred_tax_rate, 0.58, "stacked totals inferred tax rate")
-            if "$" in window:
-                add("currency", "USD", 0.86, "currency in stacked totals")
-            return
-    bottom_right = [block for block in blocks if block.bbox and block.bbox.x1 > 450 and block.bbox.y1 > 500]
-    amounts = [parse_amount(block.text) for block in bottom_right if parse_amount(block.text) is not None]
-    if len(amounts) >= 3:
-        amounts = sorted(amounts)
-        add("amount_ht", amounts[-3], 0.60, "bottom-right totals cluster")
-        add("tva_amount", amounts[-2], 0.60, "bottom-right totals cluster")
-        add("amount_ttc", amounts[-1], 0.64, "bottom-right totals cluster")
-        inferred_tax_rate = _infer_plausible_tax_rate(amounts[-3], amounts[-2])
-        if inferred_tax_rate is not None:
-            add("tax_rate", inferred_tax_rate, 0.52, "bottom-right totals inferred tax rate")
 
 
 def _infer_plausible_tax_rate(base_amount: float | None, tax_amount: float | None) -> float | None:
@@ -701,6 +676,131 @@ def _add_summary_table_candidates(add, blocks: list[OCRLine]) -> None:
         add("currency", "USD", 0.94, "summary table currency symbol")
 
 
+def _add_label_anchored_financial_candidates(add, blocks: list[OCRLine]) -> None:
+    positioned = [block for block in blocks if block.bbox and block.text.strip()]
+    if not positioned:
+        return
+
+    anchors: list[tuple[str, OCRLine, str]] = []
+    for block in positioned:
+        plain = strip_accents(block.text).lower()
+        if any(re.search(pattern, plain, re.IGNORECASE) for pattern in TTC_LABEL_PATTERNS):
+            anchors.append(("amount_ttc", block, block.text))
+        elif any(re.search(pattern, plain, re.IGNORECASE) for pattern in HT_LABEL_PATTERNS):
+            anchors.append(("amount_ht", block, block.text))
+        elif any(re.search(pattern, plain, re.IGNORECASE) for pattern in TAX_AMOUNT_LABEL_PATTERNS):
+            anchors.append(("tva_amount", block, block.text))
+
+    currency_tokens = ("EUR", "EURO", "TND", "DT", "USD", "GBP", "MAD", "DZD", "€", "$", "£")
+    for field, label, label_text in anchors:
+        inline_value = _parse_ocr_money_value(label_text)
+        if inline_value is not None:
+            add(field, inline_value, 0.92, f"label-anchored same-block amount: {label_text}", label)
+            continue
+
+        label_box = label.bbox
+        label_cy = (label_box.y1 + label_box.y2) / 2
+        label_h = max(1.0, label_box.y2 - label_box.y1)
+        candidates: list[tuple[float, OCRLine, float, bool]] = []
+        for block in positioned:
+            if block is label or block.page_number != label.page_number:
+                continue
+            amount = _parse_ocr_money_value(block.text)
+            if amount is None:
+                continue
+            box = block.bbox
+            block_cy = (box.y1 + box.y2) / 2
+            block_h = max(1.0, box.y2 - box.y1)
+            vertical_delta = abs(block_cy - label_cy)
+            same_row_tolerance = max(9.0, (label_h + block_h) * 0.65)
+            if vertical_delta > same_row_tolerance:
+                continue
+            horizontal_gap = max(0.0, box.x1 - label_box.x2, label_box.x1 - box.x2)
+            if horizontal_gap > 850:
+                continue
+            has_currency = any(token in block.text.upper() for token in currency_tokens)
+            score_distance = vertical_delta * 2.0 + horizontal_gap * 0.15
+            candidates.append((score_distance, block, amount, has_currency))
+
+        if candidates:
+            _distance, value_block, value, has_currency = min(candidates, key=lambda item: item[0])
+            confidence = 0.91 if has_currency else 0.86
+            add(field, value, confidence, f"label-anchored spatial amount: {label_text}", value_block)
+            continue
+
+        # Some invoices print the total in words directly beneath its label.
+        # Accept it only with nearby currency context and overlapping label geometry.
+        if field != "amount_ttc":
+            continue
+        word_candidates: list[tuple[float, OCRLine, float]] = []
+        for block in positioned:
+            if block.page_number != label.page_number or block is label:
+                continue
+            upper = block.text.upper()
+            if not any(token in upper for token in currency_tokens):
+                continue
+            amount = _parse_english_amount_words(block.text)
+            if amount is None:
+                continue
+            box = block.bbox
+            vertical_delta = (box.y1 + box.y2) / 2 - label_cy
+            if vertical_delta < 0 or vertical_delta > 120:
+                continue
+            horizontal_gap = max(0.0, box.x1 - label_box.x2, label_box.x1 - box.x2)
+            if horizontal_gap > 180:
+                continue
+            word_candidates.append((vertical_delta + horizontal_gap * 0.2, block, amount))
+        if word_candidates:
+            _distance, value_block, value = min(word_candidates, key=lambda item: item[0])
+            add(field, value, 0.80, f"label-anchored amount-in-words with currency: {label_text}", value_block)
+
+
+def _parse_ocr_money_value(text: str) -> float | None:
+    raw = strip_accents(text).strip()
+    raw = re.sub(r"\b(?:EUR|EUROS?|TND|DT|DNT|USD|GBP|MAD|DZD|CAD|CHF|AED)\b", "", raw, flags=re.IGNORECASE)
+    raw = raw.strip(" \t:;=()[]{}€$£")
+    if not re.fullmatch(AMOUNT_VALUE, raw):
+        return None
+    return parse_amount(raw)
+
+
+def _parse_english_amount_words(text: str) -> float | None:
+    words = re.findall(r"[a-z]+", strip_accents(text).lower().replace("-", " "))
+    units = {
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+        "nineteen": 19,
+    }
+    tens = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+    ignored = {"and", "euro", "euros", "dollar", "dollars", "pound", "pounds", "only"}
+    total = group = 0
+    saw_number = False
+    for word in words:
+        if word in ignored:
+            if word not in {"and", "only"}:
+                break
+            continue
+        if word in units:
+            group += units[word]
+            saw_number = True
+        elif word in tens:
+            group += tens[word]
+            saw_number = True
+        elif word == "hundred" and group:
+            group *= 100
+            saw_number = True
+        elif word in {"thousand", "million"} and group:
+            scale = 1_000 if word == "thousand" else 1_000_000
+            total += group * scale
+            group = 0
+            saw_number = True
+        else:
+            return None
+    return float(total + group) if saw_number else None
+
+
 
 
 def _add_layout_aware_candidates(add, blocks: list[OCRLine]) -> None:
@@ -749,13 +849,6 @@ def _add_layout_aware_candidates(add, blocks: list[OCRLine]) -> None:
         elif block_type == "totals":
             _add_totals_block_candidates(add, block_text)
 
-    for table in reconstruct_tables(blocks, lines):
-        line_totals = [row.get("values", {}).get("total") for row in table.rows]
-        line_totals = [value for value in line_totals if value is not None]
-        if line_totals:
-            add("amount_ht", round(sum(line_totals), 3), 0.74, "sum of reconstructed line totals")
-
-
 def _add_totals_block_candidates(add, text: str) -> None:
     for line in text.splitlines():
         plain = strip_accents(line).lower()
@@ -764,7 +857,7 @@ def _add_totals_block_candidates(add, text: str) -> None:
         if any(label in plain for label in ("tva", "vat", "sales tax", "tax amount")):
             add("tva_amount", _last_non_percent_amount(line), 0.91, "totals block tax")
             add("tax_rate", parse_amount(first_match([r"(\d{1,2}(?:[,.]\d{1,2})?)\s*%"], line)), 0.88, "totals block tax rate")
-        if any(label in plain for label in ("total ttc", "grand total", "amount due", "total due", "net a payer", "net ÃƒÂ  payer")):
+        if any(label in plain for label in ("total ttc", "total including", "grand total", "amount due", "total due", "net a payer", "net ÃƒÂ  payer")):
             add("amount_ttc", _last_amount(line), 0.95, "totals block TTC/amount due")
 
 
@@ -1041,7 +1134,6 @@ def _looks_like_table_row(text: str) -> bool:
 
 def _collect_labeled_amounts(text: str) -> dict[str, float | str | None]:
     result: dict[str, float | str | None] = {"amount_ht": None, "tva_amount": None, "amount_ttc": None, "tax_rate": None, "currency": None}
-    candidates: list[tuple[str, float]] = []
     for line in text.splitlines():
         clean = _clean_name(line)
         plain = strip_accents(clean).lower()
@@ -1062,14 +1154,8 @@ def _collect_labeled_amounts(text: str) -> dict[str, float | str | None]:
             rate = parse_amount(first_match([r"(\d{1,2}(?:[,.]\d{1,2})?)\s*%"], clean))
             if rate is not None:
                 result["tax_rate"] = rate
-        elif any(word in plain for word in ("total ttc", "grand total", "amount due", "balance due", "total due", "net a payer", "invoice total")):
+        elif any(word in plain for word in ("total ttc", "total including", "grand total", "amount due", "balance due", "total due", "net a payer", "invoice total", "gross worth")):
             result["amount_ttc"] = amounts[-1]
-        if any(word in plain for word in ("total", "due", "ttc", "ht", "vat", "tva", "subtotal")):
-            candidates.extend((plain, amount) for amount in amounts)
-    if result["amount_ttc"] is None and candidates:
-        ttc_candidates = [amount for label, amount in candidates if any(word in label for word in ("total", "due", "ttc"))]
-        if ttc_candidates:
-            result["amount_ttc"] = max(ttc_candidates)
     if result["amount_ht"] is not None and result["tva_amount"] is not None and result["amount_ttc"] is None:
         result["amount_ttc"] = round(float(result["amount_ht"]) + float(result["tva_amount"]), 3)
     if result["tax_rate"] is None and result["amount_ht"] and result["tva_amount"] is not None and result["amount_ht"] != 0:
