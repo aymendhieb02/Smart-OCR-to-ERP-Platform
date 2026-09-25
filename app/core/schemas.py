@@ -157,6 +157,9 @@ class Candidate(BaseModel):
 
 class FieldExtractionDetail(BaseModel):
     value: Any = None
+    display_value: str | None = None
+    machine_value: Any = None
+    canonical_value: Any = None
     confidence: float | None = None
     bbox: BoundingBox | None = None
     page: int | None = None
@@ -278,6 +281,7 @@ class CorrectionResponse(BaseModel):
 class ReviewCorrectionSubmission(BaseModel):
     document_id: str | None = None
     source_file: str | None = None
+    document_family: str | None = None
     detected_fields: ExtractedInvoiceFields | None = None
     original_payload: dict[str, Any] | None = None
     field_corrections: dict[str, Any] = Field(default_factory=dict)
@@ -288,6 +292,8 @@ class ReviewCorrectionSubmission(BaseModel):
 class ReviewCorrectionResponse(BaseModel):
     document_id: str
     corrected_fields: ExtractedInvoiceFields
+    expanded_field_overrides: dict[str, FieldExtractionDetail] = Field(default_factory=dict)
+    customs_field_validation: dict[str, Any] = Field(default_factory=dict)
     corrected_line_items: list[LineItem] = Field(default_factory=list)
     corrections: list[CorrectionItem] = Field(default_factory=list)
     validation: ValidationResult
@@ -417,6 +423,7 @@ class DossierPageClassification(BaseModel):
 
 class DossierLogicalDocument(BaseModel):
     logical_document_id: str
+    correction_document_id: str | None = None
     document_index: int
     document_type: str
     document_family: str | None = None
@@ -457,3 +464,7 @@ class ProcessDossierResponse(BaseModel):
     relationships: list[DossierRelationship] = Field(default_factory=list)
     ocr_engine: str
     timings: dict[str, Any] = Field(default_factory=dict)
+
+
+class DossierReconciliationSubmission(BaseModel):
+    logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import Counter, defaultdict
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from app.core.schemas import (
     CorrectionResponse,
     CorrectionSubmission,
     ExtractedInvoiceFields,
+    FieldExtractionDetail,
     LineItem,
     ReviewCorrectionResponse,
     ReviewCorrectionSubmission,
@@ -32,6 +34,11 @@ from app.services.validator import validate_invoice
 
 CORRECTION_DIR = settings.output_dir / "corrections"
 CORRECTION_FILE = CORRECTION_DIR / "corrections.jsonl"
+TRADENET_EDITABLE_FIELDS = frozenset({
+    "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
+    "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
+})
+TRADENET_DECIMAL_FIELDS = frozenset({"ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"})
 
 FIELD_TYPES = {
     "supplier_name": "supplier",
@@ -88,13 +95,42 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
     source_file = payload.source_file or _payload_source_file(payload) or "manual-review"
     original_evidence = _collect_original_evidence(payload)
     records: list[CorrectionItem] = []
+    expanded_field_overrides: dict[str, Any] = {}
+    numeric_errors: list[str] = []
+    customs_field_validation: dict[str, Any] = {}
 
     for field_name, correction in payload.field_corrections.items():
         value, original_value, metadata = _normalize_field_correction(correction, fields, field_name, original_evidence)
-        if hasattr(fields, field_name):
+        if field_name in TRADENET_EDITABLE_FIELDS:
+            value = str(value).strip() if value is not None else None
+            original_detail = (payload.original_payload or {}).get("expanded_fields", {}).get(field_name, {})
+            detail = dict(original_detail) if isinstance(original_detail, dict) else {}
+            if "machine_value" not in detail:
+                detail["machine_value"] = detail.get("value")
+            detail["value"] = value
+            detail["display_value"] = value
+            detail["source"] = "human correction"
+            detail["confidence"] = 1.0
+            if field_name in TRADENET_DECIMAL_FIELDS:
+                try:
+                    decimal_value = Decimal(value) if value is not None else None
+                    if decimal_value is not None and not decimal_value.is_finite():
+                        raise InvalidOperation
+                    detail["normalized_value"] = decimal_value
+                    customs_field_validation[field_name] = {
+                        "valid": decimal_value is not None,
+                        "numeric_value": decimal_value,
+                    }
+                except (InvalidOperation, ValueError):
+                    detail["normalized_value"] = None
+                    numeric_errors.append(field_name)
+                    customs_field_validation[field_name] = {"valid": False, "numeric_value": None}
+            expanded_field_overrides[field_name] = detail
+        elif hasattr(fields, field_name):
             setattr(fields, field_name, value)
         records.append(CorrectionItem(
             document_id=document_id,
+            document_family=payload.document_family,
             field_name=field_name,
             original_value=original_value,
             corrected_value=value,
@@ -138,6 +174,8 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         ))
 
     validation = validate_invoice(fields, None, "invoice")
+    if numeric_errors:
+        validation.warnings.extend(f"{field} must contain a valid decimal value." for field in numeric_errors)
     row_validation = validate_rows(fields.line_items)
     row_summary = summarize_rows(row_validation)
     financial = reason_financials(fields, fields.line_items, document_type="invoice")
@@ -224,6 +262,8 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
     return ReviewCorrectionResponse(
         document_id=document_id,
         corrected_fields=fields,
+        expanded_field_overrides={name: FieldExtractionDetail(**detail) for name, detail in expanded_field_overrides.items()},
+        customs_field_validation=customs_field_validation,
         corrected_line_items=fields.line_items,
         corrections=records,
         validation=validation,
@@ -308,6 +348,9 @@ def _collect_original_evidence(payload: ReviewCorrectionSubmission) -> dict[str,
         if isinstance(detail, dict):
             evidence[field_name] = {
                 "value": detail.get("value"),
+                "display_value": detail.get("display_value"),
+                "machine_value": detail.get("machine_value"),
+                "canonical_value": detail.get("canonical_value"),
                 "bbox": detail.get("bbox"),
                 "page": detail.get("page"),
                 "confidence": detail.get("confidence"),
@@ -445,6 +488,17 @@ def load_correction_records() -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return records
+
+
+def load_tradenet_field_corrections(document_id: str) -> dict[str, dict[str, Any]]:
+    """Return the latest saved TradeNet review values for one stable logical document."""
+    latest: dict[str, dict[str, Any]] = {}
+    for record in load_correction_records():
+        field_name = record.get("field_name")
+        if record.get("document_id") == document_id and record.get("document_family") == "customs_tradenet_v1" \
+                and field_name in TRADENET_EDITABLE_FIELDS and record.get("user_action", "edited") in {"edited", "accepted"}:
+            latest[field_name] = record
+    return latest
 
 
 def get_correction_memory(*, tenant_id: str = "default", document_family: str | None = None, supplier_identity: str | None = None) -> dict[str, Any]:

@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from app.core.schemas import ExtractedInvoiceFields
+from app.core.schemas import ExtractedInvoiceFields, FieldExtractionDetail
 from app.main import app
 from app.services import correction_store
 
@@ -112,6 +112,49 @@ def test_review_endpoint_keeps_export_disabled_with_blockers(monkeypatch, tmp_pa
     assert payload["erp_readiness"]["erp_ready_status"] == "Needs Review"
     assert "customer_name" in payload["erp_readiness"]["missing_fields"]
     assert payload["erp_export_allowed"] is False
+
+
+def test_tradenet_review_preserves_lexical_values_evidence_and_persists_by_document(monkeypatch, tmp_path):
+    correction_file = configure_temp_store(monkeypatch, tmp_path)
+    response = TestClient(app).post("/review/validate-corrections", json={
+        "document_id": "sha256:logical_document_3",
+        "source_file": "synthetic-dossier.pdf",
+        "document_family": "customs_tradenet_v1",
+        "detected_fields": {},
+        "field_corrections": {
+            "ptfn_amount": {"value": "52000.000", "original_value": "51999.000"},
+            "currency_conversion_rate": {"value": "3.2842000", "original_value": "3.2842000"},
+            "customs_total_value_tnd": {"value": "170778.400", "original_value": "170778.400"},
+            "importer": {"value": "MANUAL IMPORTER TEST", "original_value": "OCR IMPORTER TEST"},
+        },
+        "original_payload": {"expanded_fields": {
+            "ptfn_amount": {"value": "51999.000", "display_value": "51999.000", "machine_value": "51999.000", "evidence_text": "51999.000"},
+            "currency_conversion_rate": {"value": "3.2842000", "evidence_text": "3.2842000"},
+            "customs_total_value_tnd": {"value": "170778.400", "evidence_text": "170778.400"},
+            "importer": {"value": "OCR IMPORTER TEST", "machine_value": "OCR IMPORTER TEST", "canonical_value": "CANONICAL IMPORTER TEST", "evidence_text": "OCR IMPORTER TEST"},
+        }},
+    })
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["expanded_field_overrides"]["ptfn_amount"]["value"] == "52000.000"
+    assert payload["expanded_field_overrides"]["ptfn_amount"]["display_value"] == "52000.000"
+    assert payload["expanded_field_overrides"]["ptfn_amount"]["machine_value"] == "51999.000"
+    assert payload["expanded_field_overrides"]["ptfn_amount"]["evidence_text"] == "51999.000"
+    assert payload["expanded_field_overrides"]["currency_conversion_rate"]["value"] == "3.2842000"
+    assert payload["expanded_field_overrides"]["customs_total_value_tnd"]["value"] == "170778.400"
+    importer = payload["expanded_field_overrides"]["importer"]
+    assert importer["value"] == "MANUAL IMPORTER TEST"
+    assert importer["canonical_value"] == "CANONICAL IMPORTER TEST"
+    assert importer["machine_value"] == "OCR IMPORTER TEST"
+    assert payload["customs_field_validation"]["ptfn_amount"]["numeric_value"] == "52000.000"
+    assert all(payload["customs_field_validation"][name]["valid"] for name in (
+        "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
+    ))
+    records = correction_store.load_tradenet_field_corrections("sha256:logical_document_3")
+    assert records["ptfn_amount"]["corrected_value"] == "52000.000"
+    assert records["importer"]["corrected_value"] == "MANUAL IMPORTER TEST"
+    assert correction_store.load_tradenet_field_corrections("another-logical-document") == {}
+    assert "customs_tradenet_v1" in correction_file.read_text(encoding="utf-8")
 
 
 def test_static_review_ui_contains_sprint5_workspace_controls():

@@ -46,6 +46,7 @@ const INVOICE_FIELD_GROUPS = [
   "tva_amount", "amount_ttc", "tax_rate", "purchase_order_number",
 ];
 const DOCUMENT_PRESENTATION = Object.freeze({
+  customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: ["declaration_number", "declaration_date", "declaration_type", "exporter", "importer", "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"], showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
   ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
   commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   customs_declaration: { labelKey: "dossier.document_customs", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
@@ -76,6 +77,14 @@ const EDITABLE_FIELDS = [
   "amount_ttc",
   "tax_rate",
   "purchase_order_number",
+  "declaration_number",
+  "declaration_date",
+  "declaration_type",
+  "exporter",
+  "importer",
+  "ptfn_amount",
+  "currency_conversion_rate",
+  "customs_total_value_tnd",
 ];
 
 const NUMERIC_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate", "quantity", "unit_price", "discount", "line_total_ht", "tax_amount", "line_total_ttc", "total"]);
@@ -503,8 +512,11 @@ function renderDossierRelationships() {
   const reinvoice = dossierResponse.logical_documents?.find((item) => item.document_family === "ruspina_reinvoice_v1");
   const producerNumber = structuredFieldValue(producer, "invoice_number");
   const referencedInvoice = structuredFieldValue(reinvoice, "referenced_invoice");
+  const reconciled = dossierResponse.relationships?.find((item) => item.type === "producer_invoice_reference");
   let relationship = t("dossier.relationship_unavailable");
-  if (producerNumber && referencedInvoice) relationship = producerNumber === referencedInvoice ? t("dossier.relationship_match") : t("dossier.relationship_differs");
+  if (reconciled?.status === "match") relationship = t("dossier.relationship_match");
+  else if (reconciled?.status === "mismatch") relationship = t("dossier.relationship_differs");
+  else if (!reconciled && producerNumber && referencedInvoice) relationship = producerNumber === referencedInvoice ? t("dossier.relationship_match") : t("dossier.relationship_differs");
   host.innerHTML = `<strong>${escapeHtml(t("dossier.relationships"))}</strong><span>${escapeHtml(relationship)}</span>`;
 }
 
@@ -706,11 +718,42 @@ function renderFields(fields) {
     const input = document.createElement("input");
     input.className = "edit-input";
     input.dataset.field = field;
-    input.value = fields[field] ?? "";
+    const detail = lastResponse?.expanded_fields?.[field];
+    input.value = detail?.display_value ?? detail?.value ?? fields[field] ?? "";
     input.placeholder = "-";
     input.addEventListener("input", () => updateReviewField(field, input.value));
     value.appendChild(input);
-    value.appendChild(renderFieldCandidateFallback(field, fields[field]));
+    value.appendChild(renderFieldCandidateFallback(field, input.value));
+    const numericValidation = lastResponse?.customs_field_validation?.[field];
+    if (numericValidation) {
+      const validationNote = document.createElement("small");
+      validationNote.className = numericValidation.valid ? "candidate-state confirmed" : "candidate-state warning";
+      validationNote.textContent = t(numericValidation.valid ? "fields.decimal_valid" : "fields.decimal_invalid");
+      value.appendChild(validationNote);
+    }
+    if (presentation.key === "customs_tradenet_v1" && detail) {
+      const evidence = document.createElement("details");
+      evidence.className = "field-source-evidence";
+      const summary = document.createElement("summary");
+      summary.textContent = t("fields.ocr_evidence");
+      evidence.appendChild(summary);
+      if (detail.machine_value !== null && detail.machine_value !== undefined) {
+        const machine = document.createElement("div");
+        machine.textContent = `${t("fields.machine_value")}: ${displayValue(detail.machine_value)}`;
+        evidence.appendChild(machine);
+      }
+      if (detail.canonical_value !== null && detail.canonical_value !== undefined) {
+        const canonical = document.createElement("div");
+        canonical.textContent = `${t("fields.canonical_value")}: ${displayValue(detail.canonical_value)}`;
+        evidence.appendChild(canonical);
+      }
+      if (detail.evidence_text) {
+        const raw = document.createElement("pre");
+        raw.textContent = detail.evidence_text;
+        evidence.appendChild(raw);
+      }
+      value.appendChild(evidence);
+    }
     table.append(key, value);
   });
 }
@@ -1044,7 +1087,8 @@ function updateReviewField(field, rawValue) {
 }
 
 function getFieldOriginalValue(field) {
-  return lastResponse?.expanded_fields?.[field]?.value ?? lastResponse?.detected_fields?.[field] ?? null;
+  const detail = lastResponse?.expanded_fields?.[field];
+  return detail?.display_value ?? detail?.value ?? lastResponse?.detected_fields?.[field] ?? null;
 }
 
 function applyFieldToErpJson(field, value) {
@@ -1075,8 +1119,10 @@ function syncFlatExport(field, value) {
 }
 
 function syncExpandedField(field, value) {
-  if (!lastResponse.expanded_fields?.[field]) return;
+  lastResponse.expanded_fields = lastResponse.expanded_fields || {};
+  if (!lastResponse.expanded_fields[field]) lastResponse.expanded_fields[field] = { value: null, evidence_text: null };
   lastResponse.expanded_fields[field].value = value;
+  lastResponse.expanded_fields[field].display_value = value === null || value === undefined ? "" : String(value);
   lastResponse.expanded_fields[field].source = "manual correction";
   lastResponse.expanded_fields[field].confidence = 1;
 }
@@ -1951,8 +1997,9 @@ function stableIgnoredRows() {
 function buildReviewCorrectionPayload() {
   const logicalDocument = getSelectedLogicalDocument();
   return {
-    document_id: logicalDocument?.logical_document_id || lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
+    document_id: logicalDocument?.correction_document_id || logicalDocument?.logical_document_id || lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
     source_file: lastResponse.erp_json?.metadata?.source_file || null,
+    document_family: logicalDocument?.document_family || null,
     detected_fields: lastResponse.detected_fields || {},
     field_corrections: buildCorrectedFieldPayload(),
     line_item_corrections: lastResponse.detected_fields?.line_items || [],
@@ -1977,6 +2024,25 @@ function refreshValidationHeader() {
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
+  if (resolveDocumentPresentation().key === "customs_tradenet_v1") {
+    lastResponse.expanded_fields = lastResponse.expanded_fields || {};
+    Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
+      lastResponse.expanded_fields[name] = detail;
+      correctedFields[name] = {
+        ...(correctedFields[name] || {}),
+        original_value: detail.display_value ?? detail.value,
+        corrected_value: detail.display_value ?? detail.value,
+        corrected_by: "human",
+        persisted: true,
+      };
+    });
+    lastResponse.customs_field_validation = data.customs_field_validation || {};
+    const logicalDocument = getSelectedLogicalDocument();
+    if (logicalDocument) logicalDocument.response = lastResponse;
+    renderFields(lastResponse.detected_fields || {});
+    updateJsonPanels();
+    return;
+  }
   lastResponse.corrected_response = data;
   lastResponse.validated_erp_json = data.validated_erp_json || lastResponse.validated_erp_json;
   lastResponse.erp_json = data.erp_json || data.validated_erp_json || lastResponse.erp_json;
@@ -2040,6 +2106,7 @@ async function validateCorrections({ automatic = false, reason = "manual" } = {}
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("review.revalidation_failed"));
     applyCorrectionValidationResponse(data, { rerenderEditableRows: true });
+    if (dossierResponse) await refreshDossierRelationships();
     if (!automatic) {
       showTransientNote(t("review.saved", { count: data.corrections?.length || 0, status: localizedReadinessStatus(data.erp_readiness?.erp_ready_status, data.validation?.status) }));
     }
@@ -2060,6 +2127,22 @@ async function validateCorrections({ automatic = false, reason = "manual" } = {}
   }
 }
 
+async function refreshDossierRelationships() {
+  if (!dossierResponse?.logical_documents?.length) return;
+  try {
+    const response = await fetch("/review/reconcile-dossier", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ logical_documents: dossierResponse.logical_documents }),
+    });
+    if (!response.ok) return;
+    dossierResponse.relationships = (await response.json()).relationships || [];
+    renderDossierRelationships();
+  } catch (error) {
+    console.warn("Dossier reconciliation refresh failed after review:", error);
+  }
+}
+
 async function saveCorrections() {
   await validateCorrections({ automatic: false, reason: "save" });
 }
@@ -2069,16 +2152,17 @@ function buildCorrectedFieldPayload() {
   document.querySelectorAll("[data-field]").forEach((input) => {
     const field = input.dataset.field;
     const current = coerceValue(field, input.value);
-    const original = lastResponse.expanded_fields?.[field]?.value ?? null;
-    if (current !== original && current !== undefined) {
+    const previous = correctedFields[field] || {};
+    const original = previous.original_value ?? getFieldOriginalValue(field);
+    if (current !== undefined && String(current ?? "") !== String(original ?? "")) {
       corrected[field] = {
         value: current,
-        original_value: correctedFields[field]?.original_value ?? original,
-        source: correctedFields[field]?.source || "human",
-        bbox: correctedFields[field]?.bbox,
-        page: correctedFields[field]?.page,
-        confidence: correctedFields[field]?.confidence,
-        user_action: correctedFields[field]?.user_action || "edited",
+        original_value: original,
+        source: previous.source || "human",
+        bbox: previous.bbox ?? lastResponse.expanded_fields?.[field]?.bbox,
+        page: previous.page ?? lastResponse.expanded_fields?.[field]?.page,
+        confidence: previous.confidence ?? lastResponse.expanded_fields?.[field]?.confidence,
+        user_action: previous.user_action || "edited",
       };
     }
   });
