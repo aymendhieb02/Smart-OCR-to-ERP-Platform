@@ -14,6 +14,7 @@ from app.services.erp_mapper import build_erp_json, map_to_flat_erp
 from app.services.extraction_quality import apply_extraction_quality_gate, build_validated_erp_json
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
+from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -96,6 +97,22 @@ def process_dossier_file(
         timings["ocr"] = round(time.perf_counter() - stage_started, 4)
 
         page_classifications = classify_pages(ocr_result)
+        suspected_tradenet_pages = [
+            item.page_number for item in page_classifications
+            if item.document_type == "customs_declaration"
+            and item.document_family in {None, "customs_tradenet_v1"}
+        ]
+        fallback_runner = getattr(engine, "run_fallback_regions", None)
+        if suspected_tradenet_pages and callable(fallback_runner):
+            page_images = [document.images[page_number - 1] for page_number in suspected_tradenet_pages if 0 < page_number <= len(document.images)]
+            page_numbers = [page_number for page_number in suspected_tradenet_pages if 0 < page_number <= len(document.images)]
+            if page_images:
+                with _timer_stage(timer, "tradenet_header_ocr", pages=page_numbers):
+                    header_lines = fallback_runner(page_images, ["header_parties"], page_numbers=page_numbers)
+                if header_lines:
+                    ocr_result = _merge_ocr_result(ocr_result, header_lines)
+                    timings.update(getattr(engine, "last_timings", {}))
+                    page_classifications = classify_pages(ocr_result)
         groups = group_logical_documents(page_classifications)
         processed: list[ProcessedLogicalDocument] = []
         for group in groups:
@@ -110,6 +127,7 @@ def process_dossier_file(
                 ocr_engine=engine,
                 timing_recorder=timer,
                 physical_page_numbers=group.pages,
+                document_family=group.document_family,
             )
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
@@ -178,7 +196,7 @@ def process_loaded_document(
     return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
-def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None) -> ProcessInvoiceResponse:
+def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None, document_family: str | None = None) -> ProcessInvoiceResponse:
     timer = timing_recorder
     with _timer_stage(timer, "response_preparation", part="preview_generation"):
         document_preview = generate_document_preview(document) if include_preview else None
@@ -244,6 +262,19 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
         fields = quality_gate.sanitized_fields
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
+    if document_family == "customs_tradenet_v1":
+        page_dimensions = _physical_page_dimensions(document, physical_page_numbers)
+        tradenet_fields = extract_tradenet_fields(ocr_result.lines, page_dimensions=page_dimensions)
+        expanded_fields.update(tradenet_fields)
+        extraction_debug["tradenet_field_extraction"] = {
+            "source_fields": [
+                "declaration_number", "declaration_date", "declaration_type", "declaration_article_count",
+            ],
+            "declaration_code": {
+                "source": "derived",
+                "derived_from": ["declaration_type", "declaration_article_count"],
+            },
+        }
     field_boxes = build_field_boxes(expanded_fields)
     extraction_debug["layout_analysis"] = layout_debug
     extraction_debug["layout_model"] = layout_model_debug
@@ -454,6 +485,14 @@ def _logical_ocr_result(ocr_result: OCRResult, pages: tuple[int, ...]) -> OCRRes
         engine=ocr_result.engine,
         page_count=len(pages),
     )
+
+
+def _physical_page_dimensions(document: LoadedDocument, pages: tuple[int, ...] | list[int] | None) -> dict[int, tuple[int, int]]:
+    page_numbers = list(pages or range(1, len(document.images) + 1))
+    return {
+        page_number: (int(image.shape[1]), int(image.shape[0]))
+        for page_number, image in zip(page_numbers, document.images)
+    }
 
 
 def _retry_layout_if_unmapped(layout_analyzer: LayoutAnalyzer, layout_blocks: list, ocr_lines: list[OCRLine]) -> tuple[list, dict[str, Any]]:

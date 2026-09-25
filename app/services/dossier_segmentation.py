@@ -71,6 +71,10 @@ _CUSTOMS_LAYOUT_ANCHORS = (
     "exportateur", "importateur", "declarant", "designation des marchandises",
     "moyen de transport", "bureau", "pays de provenance", "pays de destination",
 )
+_TRADENET_MASTHEAD_ALIASES = ("tradenet", "tradent", "tradnt", "ttn")
+_EXPORTER_ALIASES = ("exportateur", "exporteur", "exportaleur", "exportcur")
+_IMPORTER_ALIASES = ("importateur", "importateut")
+_DECLARATION_HEADER_ALIASES = ("declaration", "declaraton", "dcaratoa")
 
 
 def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
@@ -82,6 +86,29 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         matches = tuple(anchor for anchor, _weight in rule.anchors if _matching_text(anchor) in match_text)
         score = sum(weight for anchor, weight in rule.anchors if _matching_text(anchor) in match_text)
         ranked.append((score, -priority, rule, matches))
+
+    tradenet_structure = _tradenet_structure_signals(page_lines)
+    if tradenet_structure["is_tradenet"]:
+        matched = tuple(name for name, present in tradenet_structure.items() if present and name != "is_tradenet")
+        return PageClassification(
+            page_number=page_number,
+            document_type="customs_declaration",
+            document_family="customs_tradenet_v1",
+            match_score=round(min(1.0, 0.55 + 0.1 * len(matched)), 3),
+            matched_anchors=matched,
+            reasons=("multiple TradeNet masthead, party-role, and structured-header signals",),
+        )
+
+    if tradenet_structure["customs_structure"]:
+        matched = tuple(name for name, present in tradenet_structure.items() if present and name not in {"is_tradenet", "customs_structure"})
+        return PageClassification(
+            page_number=page_number,
+            document_type="customs_declaration",
+            document_family=None,
+            match_score=round(min(0.49, 0.25 + 0.06 * len(matched)), 3),
+            matched_anchors=matched,
+            reasons=("multiple customs declaration-header structure signals; family remains uncertain",),
+        )
 
     customs_score, _customs_priority, customs_winner, customs_matches = max(
         (item for item in ranked if item[2].document_type == "customs_declaration"),
@@ -138,6 +165,75 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         page_number, "unknown", None, 0.0, (),
         ("no deterministic page-family anchors matched",),
     )
+
+
+def _tradenet_structure_signals(lines: list[OCRLine]) -> dict[str, bool]:
+    positioned = [line for line in lines if line.text.strip()]
+    normalized_lines = [(_matching_text(line.text), line) for line in positioned]
+    boxes = [line.bbox for line in positioned if line.bbox]
+    width = max((line.page_width or 0 for line in positioned), default=0) or max((box.x2 for box in boxes), default=0)
+    height = max((line.page_height or 0 for line in positioned), default=0) or max((box.y2 for box in boxes), default=0)
+
+    masthead = any(
+        any(alias in text for alias in _TRADENET_MASTHEAD_ALIASES)
+        or bool(re.search(r"\btt\s+n\b", text))
+        for text, line in normalized_lines
+        if not line.bbox or not height or line.bbox.y1 / height <= 0.16
+    )
+    exporter = any(any(alias in text for alias in _EXPORTER_ALIASES) for text, _line in normalized_lines)
+    importer = any(any(alias in text for alias in _IMPORTER_ALIASES) for text, _line in normalized_lines)
+    declaration_heading = any(
+        any(alias in text for alias in _DECLARATION_HEADER_ALIASES)
+        and "dae" not in text.replace(" ", "")
+        and (not line.bbox or not height or line.bbox.y1 / height <= 0.22)
+        for text, line in normalized_lines
+    )
+    dae_heading = any(
+        bool(re.search(r"\bd\s*a\s*e\b|\bdae\b", text))
+        and (not line.bbox or not height or line.bbox.y1 / height <= 0.22)
+        for text, line in normalized_lines
+    )
+    paired_header_values = _has_top_number_date_pair(positioned, width, height)
+    both_party_roles = exporter and importer
+
+    # Family assignment needs a masthead or an explicit declaration-section
+    # cue in addition to both customs party roles and a paired header row.
+    is_tradenet = both_party_roles and paired_header_values and (masthead or (declaration_heading and dae_heading))
+    customs_structure = both_party_roles and paired_header_values and (masthead or declaration_heading or dae_heading)
+    return {
+        "tradenet_masthead": masthead,
+        "exporter_label": exporter,
+        "importer_label": importer,
+        "declaration_header": declaration_heading,
+        "dae_header": dae_heading,
+        "paired_header_values": paired_header_values,
+        "customs_structure": customs_structure,
+        "is_tradenet": is_tradenet,
+    }
+
+
+def _has_top_number_date_pair(lines: list[OCRLine], width: float, height: float) -> bool:
+    if not width or not height:
+        return False
+    numbers: list[tuple[float, float]] = []
+    dates: list[tuple[float, float]] = []
+    for line in lines:
+        if not line.bbox:
+            continue
+        box = line.bbox
+        center_x = ((box.x1 + box.x2) / 2) / width
+        center_y = ((box.y1 + box.y2) / 2) / height
+        if center_y > 0.20:
+            continue
+        normalized = _matching_text(line.text)
+        if re.search(r"(?<!\d)\d{4,12}(?!\d)", normalized.replace(" ", "")):
+            numbers.append((center_x, center_y))
+        if (
+            re.search(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)", line.text)
+            or re.fullmatch(r"[QO0-9]{1,2}[-/.]\d{6}", line.text.strip(), re.IGNORECASE)
+        ):
+            dates.append((center_x, center_y))
+    return any(abs(nx - dx) <= 0.28 and abs(ny - dy) <= 0.055 for nx, ny in numbers for dx, dy in dates)
 
 
 def classify_pages(ocr_result: OCRResult) -> list[PageClassification]:
