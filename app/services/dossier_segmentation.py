@@ -71,10 +71,11 @@ _CUSTOMS_LAYOUT_ANCHORS = (
     "exportateur", "importateur", "declarant", "designation des marchandises",
     "moyen de transport", "bureau", "pays de provenance", "pays de destination",
 )
-_TRADENET_MASTHEAD_ALIASES = ("tradenet", "tradent", "tradnt", "ttn")
+_TRADENET_MASTHEAD_ALIASES = ("tradenet", "tradent", "tradnt", "ttn", "mttn")
 _EXPORTER_ALIASES = ("exportateur", "exporteur", "exportaleur", "exportcur")
 _IMPORTER_ALIASES = ("importateur", "importateut")
 _DECLARATION_HEADER_ALIASES = ("declaration", "declaraton", "dcaratoa")
+_DOUANES_MASTHEAD_ALIASES = ("douanes tunisiennes", "douanes tuntsiennes", "douanes tunisenne")
 
 
 def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
@@ -88,6 +89,12 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         ranked.append((score, -priority, rule, matches))
 
     tradenet_structure = _tradenet_structure_signals(page_lines)
+    if tradenet_structure["douanes_masthead"] and tradenet_structure["customs_structure"]:
+        return PageClassification(
+            page_number, "customs_declaration", "customs_douanes_tunisiennes_v1", 0.9,
+            ("douanes_masthead", "customs_structure"),
+            ("Tunisian customs masthead and fixed declaration-form structure",),
+        )
     if tradenet_structure["is_tradenet"]:
         matched = tuple(name for name, present in tradenet_structure.items() if present and name != "is_tradenet")
         return PageClassification(
@@ -100,7 +107,7 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         )
 
     if tradenet_structure["customs_structure"]:
-        matched = tuple(name for name, present in tradenet_structure.items() if present and name not in {"is_tradenet", "customs_structure"})
+        matched = tuple(name for name, present in tradenet_structure.items() if present and name != "is_tradenet")
         return PageClassification(
             page_number=page_number,
             document_type="customs_declaration",
@@ -180,8 +187,13 @@ def _tradenet_structure_signals(lines: list[OCRLine]) -> dict[str, bool]:
         for text, line in normalized_lines
         if not line.bbox or not height or line.bbox.y1 / height <= 0.16
     )
-    exporter = any(any(alias in text for alias in _EXPORTER_ALIASES) for text, _line in normalized_lines)
-    importer = any(any(alias in text for alias in _IMPORTER_ALIASES) for text, _line in normalized_lines)
+    exporter = _party_role_cue(normalized_lines, "exporter", width, height)
+    importer = _party_role_cue(normalized_lines, "importer", width, height)
+    douanes_masthead = any(
+        any(alias in text for alias in _DOUANES_MASTHEAD_ALIASES)
+        for text, line in normalized_lines
+        if not line.bbox or not height or line.bbox.y1 / height <= 0.10
+    )
     declaration_heading = any(
         any(alias in text for alias in _DECLARATION_HEADER_ALIASES)
         and "dae" not in text.replace(" ", "")
@@ -199,9 +211,10 @@ def _tradenet_structure_signals(lines: list[OCRLine]) -> dict[str, bool]:
     # Family assignment needs a masthead or an explicit declaration-section
     # cue in addition to both customs party roles and a paired header row.
     is_tradenet = both_party_roles and paired_header_values and (masthead or (declaration_heading and dae_heading))
-    customs_structure = both_party_roles and paired_header_values and (masthead or declaration_heading or dae_heading)
+    customs_structure = both_party_roles and paired_header_values
     return {
         "tradenet_masthead": masthead,
+        "douanes_masthead": douanes_masthead,
         "exporter_label": exporter,
         "importer_label": importer,
         "declaration_header": declaration_heading,
@@ -231,9 +244,26 @@ def _has_top_number_date_pair(lines: list[OCRLine], width: float, height: float)
         if (
             re.search(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)", line.text)
             or re.fullmatch(r"[QO0-9]{1,2}[-/.]\d{6}", line.text.strip(), re.IGNORECASE)
+            or re.search(r"(?<!\d)[./-]?\d{1,2}[./-]\d{2,4}(?!\d)", line.text)
         ):
             dates.append((center_x, center_y))
     return any(abs(nx - dx) <= 0.28 and abs(ny - dy) <= 0.055 for nx, ny in numbers for dx, dy in dates)
+
+
+def _party_role_cue(normalized_lines: list[tuple[str, OCRLine]], role: str, width: float, height: float) -> bool:
+    aliases = _EXPORTER_ALIASES if role == "exporter" else _IMPORTER_ALIASES
+    prefixes = ("expor", "expr", "lxpor") if role == "exporter" else ("impor", "imyx", "inn")
+    for text, line in normalized_lines:
+        if not line.bbox or not width or not height:
+            if any(alias in text for alias in aliases):
+                return True
+            continue
+        center_x = (line.bbox.x1 + line.bbox.x2) / (2 * width)
+        center_y = (line.bbox.y1 + line.bbox.y2) / (2 * height)
+        if 0.16 <= center_x <= 0.48 and 0.012 <= center_y <= 0.16 and len(text) <= 18:
+            if any(alias in text for alias in aliases) or text.startswith(prefixes):
+                return True
+    return False
 
 
 def classify_pages(ocr_result: OCRResult) -> list[PageClassification]:

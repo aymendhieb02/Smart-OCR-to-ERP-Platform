@@ -134,6 +134,47 @@ def test_multi_signal_customs_structure_can_keep_family_unknown():
     assert result.document_family is None
 
 
+def test_noisy_party_labels_and_partial_date_trigger_fixed_form_review():
+    for exporter, importer, date_text in (
+        ("Lxporhour", "InNtaleur", "01.01-033"),
+        ("Exprnlour", "Imyxarintci", ".01-2023"),
+    ):
+        lines = [
+            _positioned(exporter, 3, 250, 45),
+            _positioned(importer, 3, 250, 175),
+            _positioned("446028", 3, 675, 70),
+            _positioned(date_text, 3, 795, 70),
+            _positioned("FACTURE", 3, 220, 110),
+        ]
+        result = classify_page(lines, 3)
+        assert result.document_type == "customs_declaration"
+        assert result.document_family is None
+
+
+def test_noisy_tunisian_customs_masthead_keeps_distinct_family():
+    result = classify_page([
+        _positioned("DOUANES TUNTSIENNES", 3, 200, 15),
+        _positioned("Exportateur", 3, 250, 70),
+        _positioned("Importateur", 3, 250, 185),
+        _positioned("123456", 3, 670, 95),
+        _positioned("04-02-2025", 3, 790, 95),
+    ], 3)
+    assert result.document_type == "customs_declaration"
+    assert result.document_family == "customs_douanes_tunisiennes_v1"
+
+
+def test_invoice_number_date_pair_without_customs_roles_stays_invoice():
+    result = classify_page([
+        _positioned("INVOICE", 1, 200, 40),
+        _positioned("Supplier", 1, 250, 65),
+        _positioned("Customer", 1, 250, 170),
+        _positioned("123456", 1, 670, 95),
+        _positioned("04-02-2025", 1, 790, 95),
+    ], 1)
+    assert result.document_type == "commercial_invoice"
+    assert result.document_family is None
+
+
 def test_classify_pages_includes_page_without_ocr_lines():
     result = classify_pages(OCRResult(
         raw_text="Invoice",
