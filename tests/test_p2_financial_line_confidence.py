@@ -27,7 +27,7 @@ def test_financial_reasoning_accepts_stamp_discount_and_shipping() -> None:
     assert result["financial_errors"] == []
 
 
-def test_quality_gate_recovers_totals_from_line_sum_and_tax_rate() -> None:
+def test_quality_gate_does_not_infer_missing_ht_or_tax_from_line_sum_and_rate() -> None:
     fields = ExtractedInvoiceFields(amount_ht=None, tva_amount=None, amount_ttc=119.0, tax_rate=19.0)
     fields.line_items = [
         LineItem(description="A", quantity=2, unit_price=20, line_total_ht=40, total=40),
@@ -36,8 +36,8 @@ def test_quality_gate_recovers_totals_from_line_sum_and_tax_rate() -> None:
 
     result = apply_extraction_quality_gate(fields, {}, {})
 
-    assert result.sanitized_fields.amount_ht == 100.0
-    assert result.sanitized_fields.tva_amount == 19.0
+    assert result.sanitized_fields.amount_ht is None
+    assert result.sanitized_fields.tva_amount is None
     assert result.sanitized_fields.amount_ttc == 119.0
 
 

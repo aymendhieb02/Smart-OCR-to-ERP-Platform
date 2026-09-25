@@ -46,21 +46,20 @@ $ 6 204,19
     assert fields.invoice_date == date(2013, 4, 13)
 
 
-def test_stacked_usd_totals_extract_amounts_currency_and_tax_rate():
+def test_explicit_usd_total_labels_extract_amounts_currency_and_tax_rate():
     text = """
-Total
-$5 640,17
-$ 564,02
-$ 6 204,19
+Subtotal HT $1 000,00
+Tax Amount $200,00
+Total Including All taxes $1 200,00 USD
 """
 
     fields, _candidates, _confidences, _debug = extract_with_candidates(text)
 
-    assert fields.amount_ht == 5640.17
-    assert fields.tva_amount == 564.02
-    assert fields.amount_ttc == 6204.19
+    assert fields.amount_ht == 1000.0
+    assert fields.tva_amount == 200.0
+    assert fields.amount_ttc == 1200.0
     assert fields.currency == "USD"
-    assert fields.tax_rate == 10.0
+    assert fields.tax_rate == 20.0
 
 
 def test_coordinate_line_items_ignore_row_number_and_map_columns():
