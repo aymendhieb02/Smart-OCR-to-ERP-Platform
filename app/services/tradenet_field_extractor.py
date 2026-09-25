@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from decimal import Decimal
 import re
 import unicodedata
 from typing import Callable
@@ -378,9 +379,9 @@ _FINANCIAL_CELLS = {
 }
 
 
-def _parse_amount(text: str) -> float | None:
+def _parse_amount(text: str) -> Decimal | None:
     match = re.fullmatch(r"\s*[$€]?\s*(\d{1,9}[.,]\d{2,7})\s*", text)
-    return float(match.group(1).replace(",", ".")) if match else None
+    return Decimal(match.group(1).replace(",", ".")) if match else None
 
 
 def _extract_financial_cell(lines: list[OCRLine], name: str, width: int, height: int, vertical_shift: float) -> FieldExtractionDetail | None:
@@ -413,7 +414,11 @@ def _extract_financial_cell(lines: list[OCRLine], name: str, width: int, height:
     if not candidates:
         return None
     _score, selected, value = max(candidates, key=lambda item: item[0])
-    detail = _detail(value, value, selected, selected, width, height)
+    lexical_match = re.fullmatch(r"\s*[$€]?\s*(\d{1,9}[.,]\d{2,7})\s*", selected.text)
+    lexical_value = lexical_match.group(1)
+    detail = _detail(lexical_value, value, selected, selected, width, height)
+    detail.display_value = lexical_value
+    detail.machine_value = lexical_value
     detail.source = f"TradeNet {name} cell OCR ({selected.source or 'unknown'})"
     if not labels:
         detail.confidence = round((detail.confidence or 0.0) * 0.82, 3)

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
 
 from app.core.config import settings
-from app.core.schemas import Candidate, DossierRelationship, DocumentPreview, OCRLine, OCRResult, ProcessInvoiceResponse
+from app.core.schemas import Candidate, DossierRelationship, DocumentPreview, FieldExtractionDetail, OCRLine, OCRResult, ProcessInvoiceResponse
 from app.services.bbox_contract import apply_public_bbox_contract, bbox_loss_stage, count_public_ocr_boxes
 from app.services.document_classifier import classify_document
 from app.services.document_layout import analyze_document_layout
@@ -18,6 +19,9 @@ from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.ruspina_field_extractor import extract_ruspina_fields
 from app.services.dossier_reconciler import reconcile_dossier
+from app.core.canonical_parties import canonicalize_party
+from app.services.correction_identity import correction_document_id
+from app.services.correction_store import load_tradenet_field_corrections
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -184,6 +188,11 @@ def process_dossier_file(
                     and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
                 ),
             )
+            if group.document_family == "customs_tradenet_v1":
+                if path.is_file():
+                    stable_document_id = correction_document_id(path, group.group_id)
+                    persisted = load_tradenet_field_corrections(stable_document_id)
+                    _apply_tradenet_corrections(response, persisted)
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
     return DossierProcessResult(
@@ -196,6 +205,54 @@ def process_dossier_file(
         timings=timings,
         relationships=reconcile_dossier(processed),
     )
+
+
+def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: dict[str, dict]) -> None:
+    for field_name, record in corrections.items():
+        detail = response.expanded_fields.get(field_name)
+        if detail is None:
+            detail = FieldExtractionDetail(source="human correction", confidence=1.0)
+            response.expanded_fields[field_name] = detail
+        if detail.machine_value is None:
+            detail.machine_value = detail.value
+        detail.value = record.get("corrected_value")
+        detail.display_value = str(detail.value) if detail.value is not None else ""
+        detail.source = "human correction"
+        detail.confidence = 1.0
+        if field_name in {"ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"}:
+            try:
+                detail.normalized_value = Decimal(str(detail.value)) if detail.value is not None else None
+            except (InvalidOperation, ValueError):
+                detail.normalized_value = None
+        for box in response.field_boxes:
+            if box.field == field_name:
+                box.value = detail.value
+                box.source = "human correction"
+                box.confidence = 1.0
+        for table in response.dynamic_tables:
+            for row in table.rows:
+                if row.key == field_name:
+                    row.value = detail.value
+                    row.source = "human correction"
+                    row.confidence = 1.0
+
+
+def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -> str | None:
+    detail = fields.get("importer")
+    if detail is None or detail.value is None:
+        return None
+    raw_importer = str(detail.value)
+    effective, reason = canonicalize_party(
+        raw_importer, role="importer", document_family=document_family or "",
+    )
+    detail.machine_value = raw_importer
+    if reason:
+        detail.canonical_value = effective
+        detail.normalized_value = effective
+        detail.value = effective
+        detail.display_value = effective
+        detail.source = f"{detail.source or 'TradeNet OCR'}; {reason}"
+    return reason
 
 
 def process_document_file(
@@ -359,6 +416,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     if fixed_customs_form or document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
         page_dimensions = _physical_page_dimensions(document, physical_page_numbers)
         tradenet_fields = extract_tradenet_fields(ocr_result.lines, page_dimensions=page_dimensions)
+        _canonicalize_tradenet_importer(tradenet_fields, document_family)
         expanded_fields.update(tradenet_fields)
         extraction_debug["tradenet_field_extraction"] = {
             "source_fields": [

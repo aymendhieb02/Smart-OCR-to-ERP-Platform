@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+from types import SimpleNamespace
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -13,12 +14,15 @@ from app.core.schemas import (
     DossierLogicalDocument,
     DossierPageClassification,
     DossierReviewSummary,
+    DossierReconciliationSubmission,
     ProcessDossierResponse,
     ProcessInvoiceResponse,
     ReviewCorrectionResponse,
     ReviewCorrectionSubmission,
 )
 from app.services.correction_store import submit_corrections, validate_review_corrections
+from app.services.correction_identity import correction_document_id
+from app.services.dossier_reconciler import reconcile_dossier
 from app.services.erp_mapper import map_to_flat_erp
 from app.services.file_loader import save_upload_to_temp
 from app.services.ocr_engine import OCREngine
@@ -85,6 +89,7 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
         documents = [
             DossierLogicalDocument(
                 logical_document_id=f"{dossier_id}:{item.group.group_id}",
+                correction_document_id=correction_document_id(temp_path, item.group.group_id),
                 document_index=index,
                 document_type=item.group.document_type,
                 document_family=item.group.document_family,
@@ -183,6 +188,23 @@ async def validate_invoice_review_corrections(payload: ReviewCorrectionSubmissio
         return validate_review_corrections(payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Review correction validation failed: {exc}") from exc
+
+
+@router.post("/review/reconcile-dossier")
+async def reconcile_reviewed_dossier(payload: DossierReconciliationSubmission) -> dict:
+    documents = [
+        SimpleNamespace(
+            group=SimpleNamespace(
+                group_id=item.logical_document_id,
+                document_type=item.document_type,
+                document_family=item.document_family,
+                pages=tuple(item.physical_page_numbers),
+            ),
+            response=item.response,
+        )
+        for item in payload.logical_documents
+    ]
+    return {"relationships": [item.model_dump(mode="json") for item in reconcile_dossier(documents)]}
 
 @router.post("/export-erp-json", response_model=ERPFlatExport)
 async def export_erp_json(payload: ERPInvoiceJSON) -> ERPFlatExport:
