@@ -100,7 +100,7 @@ def process_dossier_file(
         suspected_tradenet_pages = [
             item.page_number for item in page_classifications
             if item.document_type == "customs_declaration"
-            and item.document_family in {None, "customs_tradenet_v1"}
+            and item.document_family in {None, "customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}
         ]
         fallback_runner = getattr(engine, "run_fallback_regions", None)
         if suspected_tradenet_pages and callable(fallback_runner):
@@ -111,6 +111,53 @@ def process_dossier_file(
                     header_lines = fallback_runner(page_images, ["header_parties"], page_numbers=page_numbers)
                 if header_lines:
                     ocr_result = _merge_ocr_result(ocr_result, header_lines)
+                    timings.update(getattr(engine, "last_timings", {}))
+                    page_classifications = classify_pages(ocr_result)
+        tradenet_pages = [
+            item.page_number for item in page_classifications
+            if item.document_type == "customs_declaration"
+            and item.document_family in {None, "customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}
+            and 0 < item.page_number <= len(document.images)
+        ]
+        if tradenet_pages and callable(fallback_runner):
+            targeted_started = time.perf_counter()
+            with _timer_stage(timer, "tradenet_targeted_ocr", pages=tradenet_pages):
+                targeted_lines = fallback_runner(
+                    [document.images[page_number - 1] for page_number in tradenet_pages],
+                    ["tradenet_declaration_header", "tradenet_parties", "tradenet_financial"],
+                    page_numbers=tradenet_pages,
+                )
+            timings["tradenet_targeted_ocr"] = round(time.perf_counter() - targeted_started, 4)
+            timings["tradenet_targeted_lines"] = len(targeted_lines)
+            if targeted_lines:
+                ocr_result = _merge_ocr_result(ocr_result, targeted_lines)
+                timings.update(getattr(engine, "last_timings", {}))
+                page_classifications = classify_pages(ocr_result)
+            total_retry_pages = []
+            for page_number in tradenet_pages:
+                page_lines = [line for line in ocr_result.lines if line.page_number == page_number]
+                image = document.images[page_number - 1]
+                preview_fields = extract_tradenet_fields(
+                    page_lines,
+                    page_dimensions={page_number: (int(image.shape[1]), int(image.shape[0]))},
+                )
+                total = preview_fields["customs_total_value_tnd"]
+                if total.value is None or (total.confidence or 0.0) < 0.82:
+                    total_retry_pages.append(page_number)
+            if total_retry_pages:
+                retry_started = time.perf_counter()
+                with _timer_stage(timer, "tradenet_customs_total_retry", pages=total_retry_pages):
+                    total_lines = fallback_runner(
+                        [document.images[page_number - 1] for page_number in total_retry_pages],
+                        ["tradenet_customs_total"],
+                        page_numbers=total_retry_pages,
+                    )
+                retry_elapsed = time.perf_counter() - retry_started
+                timings["tradenet_customs_total_retry"] = round(retry_elapsed, 4)
+                timings["tradenet_targeted_ocr"] = round(timings["tradenet_targeted_ocr"] + retry_elapsed, 4)
+                timings["tradenet_targeted_lines"] += len(total_lines)
+                if total_lines:
+                    ocr_result = _merge_ocr_result(ocr_result, total_lines)
                     timings.update(getattr(engine, "last_timings", {}))
                     page_classifications = classify_pages(ocr_result)
         groups = group_logical_documents(page_classifications)
@@ -128,6 +175,10 @@ def process_dossier_file(
                 timing_recorder=timer,
                 physical_page_numbers=group.pages,
                 document_family=group.document_family,
+                fixed_customs_form=(
+                    group.document_type == "customs_declaration"
+                    and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
+                ),
             )
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
@@ -196,7 +247,7 @@ def process_loaded_document(
     return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
-def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None, document_family: str | None = None) -> ProcessInvoiceResponse:
+def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None, document_family: str | None = None, fixed_customs_form: bool = False) -> ProcessInvoiceResponse:
     timer = timing_recorder
     with _timer_stage(timer, "response_preparation", part="preview_generation"):
         document_preview = generate_document_preview(document) if include_preview else None
@@ -262,13 +313,15 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
         fields = quality_gate.sanitized_fields
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
-    if document_family == "customs_tradenet_v1":
+    if fixed_customs_form or document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
         page_dimensions = _physical_page_dimensions(document, physical_page_numbers)
         tradenet_fields = extract_tradenet_fields(ocr_result.lines, page_dimensions=page_dimensions)
         expanded_fields.update(tradenet_fields)
         extraction_debug["tradenet_field_extraction"] = {
             "source_fields": [
-                "declaration_number", "declaration_date", "declaration_type", "declaration_article_count",
+                "declaration_number", "declaration_date", "declaration_type",
+                "exporter", "importer", "ptfn_amount", "currency_conversion_rate",
+                "customs_total_value_tnd", "declaration_article_count",
             ],
             "declaration_code": {
                 "source": "derived",

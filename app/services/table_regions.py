@@ -26,6 +26,16 @@ def build_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     return _dedupe_regions(regions)
 
 
+def build_tradenet_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
+    """Small, normalized crops for the recurring TradeNet declaration form."""
+    return [
+        _region(image, "tradenet_declaration_header", 0.48, 0.00, 0.98, 0.165),
+        _region(image, "tradenet_parties", 0.16, 0.00, 0.64, 0.19),
+        _region(image, "tradenet_financial", 0.55, 0.19, 0.98, 0.335),
+        _region(image, "tradenet_customs_total", 0.76, 0.235, 0.98, 0.315),
+    ]
+
+
 def _region(image: np.ndarray, name: str, x1: float, y1: float, x2: float, y2: float) -> OCRRegion:
     h, w = image.shape[:2]
     left = max(0, min(w - 1, int(w * x1)))
