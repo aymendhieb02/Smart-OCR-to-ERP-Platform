@@ -7,12 +7,24 @@ import unicodedata
 
 
 RUSPINA_TRADE_NET_IMPORTER = "RUSPINA IMP EXP P-C GROUP BYOUT EZZ LIBYE"
+RUSPINA_IMPORT_EXPORT_PREFIX = "RUSPINA IMPORT ET EXPORT P-C"
+_CUSTOMS_PARTY_FAMILIES = frozenset({"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"})
+_RUSPINA_IMPORT_EXPORT_PREFIX = re.compile(
+    r"^\s*(?:R?U[S$]P[I1]NA)\s+(?:IMPORT|IMP)\s+(?:ET\s*)?(?:EXPORT|EXP)\s*P\s*[-‐‑‒–—]?\s*C(?P<suffix>.*)$",
+    re.IGNORECASE,
+)
 
 
 def canonicalize_party(value: str, *, role: str, document_family: str) -> tuple[str, str | None]:
     """Return a known canonical party only when several distinctive tokens agree."""
-    if role != "importer" or document_family != "customs_tradenet_v1":
+    if role != "importer" or document_family not in _CUSTOMS_PARTY_FAMILIES:
         return value, None
+    prefix_match = _RUSPINA_IMPORT_EXPORT_PREFIX.match(unicodedata.normalize("NFKC", value))
+    if prefix_match:
+        suffix = re.sub(r"^[\s:;,]+", "", prefix_match.group("suffix"))
+        suffix = " ".join(suffix.split())
+        effective = RUSPINA_IMPORT_EXPORT_PREFIX + (f" {suffix}" if suffix else "")
+        return effective, "Matched the strong RUSPINA IMPORT/EXPORT P-C importer prefix; preserved downstream company text."
     normalized = _normalize_ocr_party(value)
     tokens = set(normalized.split())
     # Recognize only documented OCR variants for this one registered entity.

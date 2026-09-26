@@ -38,6 +38,7 @@ TRADENET_EDITABLE_FIELDS = frozenset({
     "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
     "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
 })
+TRADENET_EDITABLE_FAMILIES = frozenset({"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"})
 TRADENET_DECIMAL_FIELDS = frozenset({"ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"})
 
 FIELD_TYPES = {
@@ -101,7 +102,7 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
 
     for field_name, correction in payload.field_corrections.items():
         value, original_value, metadata = _normalize_field_correction(correction, fields, field_name, original_evidence)
-        if field_name in TRADENET_EDITABLE_FIELDS:
+        if payload.document_family in TRADENET_EDITABLE_FAMILIES and field_name in TRADENET_EDITABLE_FIELDS:
             value = str(value).strip() if value is not None else None
             original_detail = (payload.original_payload or {}).get("expanded_fields", {}).get(field_name, {})
             detail = dict(original_detail) if isinstance(original_detail, dict) else {}
@@ -109,8 +110,10 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
                 detail["machine_value"] = detail.get("value")
             detail["value"] = value
             detail["display_value"] = value
-            detail["source"] = "human correction"
-            detail["confidence"] = 1.0
+            if not detail.get("source"):
+                detail["source"] = "human correction"
+            if detail.get("confidence") is None:
+                detail["confidence"] = 1.0
             if field_name in TRADENET_DECIMAL_FIELDS:
                 try:
                     decimal_value = Decimal(value) if value is not None else None
@@ -491,11 +494,11 @@ def load_correction_records() -> list[dict[str, Any]]:
 
 
 def load_tradenet_field_corrections(document_id: str) -> dict[str, dict[str, Any]]:
-    """Return the latest saved TradeNet review values for one stable logical document."""
+    """Return the latest saved customs review values for one stable logical document."""
     latest: dict[str, dict[str, Any]] = {}
     for record in load_correction_records():
         field_name = record.get("field_name")
-        if record.get("document_id") == document_id and record.get("document_family") == "customs_tradenet_v1" \
+        if record.get("document_id") == document_id and record.get("document_family") in TRADENET_EDITABLE_FAMILIES \
                 and field_name in TRADENET_EDITABLE_FIELDS and record.get("user_action", "edited") in {"edited", "accepted"}:
             latest[field_name] = record
     return latest

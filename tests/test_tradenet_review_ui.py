@@ -44,13 +44,38 @@ def test_pipeline_canonicalizes_only_importer_and_retains_raw_evidence():
     }
     reason = _canonicalize_tradenet_importer(fields, "customs_tradenet_v1")
     importer = fields["importer"]
-    assert importer.value == importer.display_value == "RUSPINA IMP EXP P-C GROUP BYOUT EZZ LIBYE"
+    assert importer.value == importer.display_value == "RUSPINA IMPORT ET EXPORT P-C GROUP BYOUT E2Z L1BYE"
     assert importer.machine_value == raw and importer.evidence_text == raw
     assert importer.canonical_value == importer.value and reason
     assert fields["exporter"].value == "UNRELATED EXPORTER TEST"
     other = FieldExtractionDetail(value=raw)
-    assert _canonicalize_tradenet_importer({"importer": other}, "customs_douanes_tunisiennes_v1") is None
+    assert _canonicalize_tradenet_importer({"importer": other}, "producer_invoice_v1") is None
     assert other.value == raw
+
+
+def test_human_importer_correction_overrides_prefix_normalization_without_losing_raw_evidence():
+    raw = "USPINA IMPORT ET EXPORT P-CIMPACT COMPANY"
+    fields = {"importer": FieldExtractionDetail(
+        value=raw, evidence_text=raw, page=3, confidence=0.82, source="TradeNet full-page OCR",
+        bbox={"x1": 1, "y1": 2, "x2": 3, "y2": 4},
+    )}
+    reason = _canonicalize_tradenet_importer(fields, "customs_tradenet_v1")
+    assert reason
+    assert fields["importer"].value == "RUSPINA IMPORT ET EXPORT P-C IMPACT COMPANY"
+    assert fields["importer"].canonicalization_reason == reason
+    assert fields["importer"].source == "TradeNet full-page OCR"
+
+    _apply_tradenet_corrections(SimpleNamespace(expanded_fields=fields, field_boxes=[], dynamic_tables=[]), {
+        "importer": {"corrected_value": "MANUAL IMPORTER TEST"},
+    })
+    detail = fields["importer"]
+    assert detail.value == detail.display_value == "MANUAL IMPORTER TEST"
+    assert detail.canonical_value == "RUSPINA IMPORT ET EXPORT P-C IMPACT COMPANY"
+    assert detail.machine_value == raw
+    assert detail.evidence_text == raw
+    assert detail.page == 3 and detail.confidence == 0.82
+    assert detail.source == "TradeNet full-page OCR"
+    assert detail.bbox.x1 == 1 and detail.canonicalization_reason == reason
 
 
 def test_tradenet_editor_and_french_labels_use_expanded_values_and_source_display():
@@ -60,7 +85,7 @@ def test_tradenet_editor_and_french_labels_use_expanded_values_and_source_displa
         "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
         "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
     )
-    assert 'customs_tradenet_v1: { labelKey: "dossier.document_customs"' in script
+    assert 'customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS' in script
     assert "input.value = detail?.display_value ?? detail?.value ?? fields[field] ?? \"\"" in script
     assert "expanded_field_overrides" in script
     assert "correction_document_id" in script

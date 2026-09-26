@@ -45,11 +45,16 @@ const INVOICE_FIELD_GROUPS = [
   "customer_name", "customer_address", "customer_tax_id", "currency", "amount_ht",
   "tva_amount", "amount_ttc", "tax_rate", "purchase_order_number",
 ];
+const CUSTOMS_TRADENET_REVIEW_FIELDS = Object.freeze([
+  "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
+  "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
+]);
 const DOCUMENT_PRESENTATION = Object.freeze({
-  customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: ["declaration_number", "declaration_date", "declaration_type", "exporter", "importer", "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"], showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
+  customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
+  customs_douanes_tunisiennes_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
   ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
   commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
-  customs_declaration: { labelKey: "dossier.document_customs", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
+  customs_declaration: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
   unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
 });
 
@@ -707,7 +712,8 @@ function renderFields(fields) {
   table.innerHTML = "";
   const presentation = resolveDocumentPresentation();
   if (!presentation.allowCorrections) {
-    table.innerHTML = `<div class="note warning-note">${escapeHtml(t("dossier.correction_unavailable"))}</div>${renderAvailableStructuredValues(fields, lastResponse?.expanded_fields)}`;
+    const allowedFields = presentation.key === "customs_declaration" ? presentation.fields : null;
+    table.innerHTML = `<div class="note warning-note">${escapeHtml(t("dossier.correction_unavailable"))}</div>${renderAvailableStructuredValues(fields, lastResponse?.expanded_fields, allowedFields)}`;
     return;
   }
   EDITABLE_FIELDS.filter((field) => presentation.fields.includes(field)).forEach((field) => {
@@ -731,7 +737,7 @@ function renderFields(fields) {
       validationNote.textContent = t(numericValidation.valid ? "fields.decimal_valid" : "fields.decimal_invalid");
       value.appendChild(validationNote);
     }
-    if (presentation.key === "customs_tradenet_v1" && detail) {
+    if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1"].includes(presentation.key) && detail) {
       const evidence = document.createElement("details");
       evidence.className = "field-source-evidence";
       const summary = document.createElement("summary");
@@ -758,12 +764,13 @@ function renderFields(fields) {
   });
 }
 
-function renderAvailableStructuredValues(fields = {}, expandedFields = {}) {
+function renderAvailableStructuredValues(fields = {}, expandedFields = {}, allowedFields = null) {
+  const allowed = Array.isArray(allowedFields) ? new Set(allowedFields) : null;
   const values = new Map(Object.entries(fields));
   Object.entries(expandedFields).forEach(([key, detail]) => {
     if (!values.has(key) || values.get(key) === null || values.get(key) === "") values.set(key, detail?.value);
   });
-  const entries = [...values.entries()].filter(([, value]) => value !== null && value !== undefined && value !== "" && !Array.isArray(value));
+  const entries = [...values.entries()].filter(([key, value]) => (!allowed || allowed.has(key)) && value !== null && value !== undefined && value !== "" && !Array.isArray(value));
   if (!entries.length) return `<div class="note">${escapeHtml(t("dossier.information_unavailable"))}</div>`;
   return `<div class="readonly-fields">${entries.map(([key, value]) => {
     const translated = t(`fields.${key}`);
@@ -2024,7 +2031,7 @@ function refreshValidationHeader() {
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
-  if (resolveDocumentPresentation().key === "customs_tradenet_v1") {
+  if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1"].includes(resolveDocumentPresentation().key)) {
     lastResponse.expanded_fields = lastResponse.expanded_fields || {};
     Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
       lastResponse.expanded_fields[name] = detail;
