@@ -79,7 +79,9 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
             date_line = _right_value(of_label, lines, width, height, lambda line: bool(_parse_date(line.text)), max_x=0.82)
             if date_line:
                 parsed = _parse_date(date_line.text)
-                fields["invoice_date"] = _detail(parsed.isoformat(), width, height, of_label, date_line)
+                fields["invoice_date"] = _detail(
+                    parsed.isoformat(), width, height, of_label, date_line, display_value=date_line.text.strip(),
+                )
 
     for line in lines:
         if not _in_region(line, width, height, (0.20, 0.10, 0.65, 0.22)):
@@ -125,7 +127,10 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
                    and (amount := _money(line.text)) is not None and amount > 0]
     if total_lines:
         selected = max(total_lines, key=lambda line: (line.confidence or 0) + (0.02 if line.source == "regional_fallback" else 0))
-        fields["total"] = _detail(_money(selected.text), width, height, selected)
+        fields["total"] = _detail(
+            _money(selected.text), width, height, selected,
+            display_value=re.sub(r"\s*(?:EUR|EURO|E0R|UR)\s*$", "", selected.text, flags=re.IGNORECASE).strip(),
+        )
 
     amount_words = _amount_words(lines, width, height)
     if amount_words:
@@ -150,7 +155,7 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
             continue
         label, value_line = pair
         value = parser(value_line)
-        detail = _detail(value, width, height, label, value_line)
+        detail = _detail(value, width, height, label, value_line, display_value=value_line.text.strip())
         fields[name] = detail
         if name == "delivery":
             fields["incoterm"] = detail
@@ -338,11 +343,11 @@ def _plain(text: str) -> str:
     return strip_accents(text).casefold().strip()
 
 
-def _detail(value, width: int, height: int, *observations: OCRLine) -> FieldExtractionDetail:
+def _detail(value, width: int, height: int, *observations: OCRLine, display_value: str | None = None) -> FieldExtractionDetail:
     observations = tuple({id(line): line for line in observations}.values())
     first = observations[0]
     return FieldExtractionDetail(
-        value=value, normalized_value=value,
+        value=value, display_value=display_value, normalized_value=value,
         evidence_text="\n".join(line.text for line in observations),
         confidence=round(min(line.confidence or 0 for line in observations), 3),
         bbox=_union_box(observations), page=first.page_number,

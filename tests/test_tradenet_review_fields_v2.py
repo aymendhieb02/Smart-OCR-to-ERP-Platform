@@ -59,9 +59,9 @@ def test_customs_review_configuration_is_exact_and_every_key_is_editable():
         assert label in strings
 
 
-def test_producer_and_ruspina_review_field_configurations_are_unchanged():
+def test_producer_review_configuration_is_unchanged_and_ruspina_is_family_specific():
     script = Path("app/static/app.js").read_text(encoding="utf-8")
-    assert 'ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: INVOICE_FIELD_GROUPS' in script
+    assert 'ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: RUSPINA_REVIEW_FIELDS' in script
     assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS' in script
 
 

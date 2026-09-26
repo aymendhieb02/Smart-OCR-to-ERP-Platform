@@ -31,6 +31,7 @@ from app.services.invoice_validation_report import build_invoice_validation_repo
 from app.services.row_validation_engine import summarize_rows, validate_rows
 from app.services.validation_explainer import build_validation_explanation
 from app.services.validator import validate_invoice
+from app.utils.helpers import parse_amount
 
 CORRECTION_DIR = settings.output_dir / "corrections"
 CORRECTION_FILE = CORRECTION_DIR / "corrections.jsonl"
@@ -40,6 +41,16 @@ TRADENET_EDITABLE_FIELDS = frozenset({
 })
 TRADENET_EDITABLE_FAMILIES = frozenset({"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"})
 TRADENET_DECIMAL_FIELDS = frozenset({"ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"})
+RUSPINA_REVIEW_FIELDS = frozenset({
+    "invoice_number", "invoice_date", "referenced_invoice", "client", "address", "currency", "total",
+    "total_amount_words", "gross_weight", "net_weight", "number_of_bags", "delivery", "origin",
+    "payment", "iban", "bank", "swift",
+})
+RUSPINA_NUMERIC_REVIEW_FIELDS = frozenset({"total", "gross_weight", "net_weight", "number_of_bags"})
+REVIEW_EDITABLE_FIELDS_BY_FAMILY = {
+    **{family: TRADENET_EDITABLE_FIELDS for family in TRADENET_EDITABLE_FAMILIES},
+    "ruspina_reinvoice_v1": RUSPINA_REVIEW_FIELDS,
+}
 
 FIELD_TYPES = {
     "supplier_name": "supplier",
@@ -102,19 +113,22 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
 
     for field_name, correction in payload.field_corrections.items():
         value, original_value, metadata = _normalize_field_correction(correction, fields, field_name, original_evidence)
-        if payload.document_family in TRADENET_EDITABLE_FAMILIES and field_name in TRADENET_EDITABLE_FIELDS:
+        family_fields = REVIEW_EDITABLE_FIELDS_BY_FAMILY.get(payload.document_family, frozenset())
+        if field_name in family_fields:
             value = str(value).strip() if value is not None else None
             original_detail = (payload.original_payload or {}).get("expanded_fields", {}).get(field_name, {})
             detail = dict(original_detail) if isinstance(original_detail, dict) else {}
-            if "machine_value" not in detail:
+            if detail.get("machine_value") is None:
                 detail["machine_value"] = detail.get("value")
             detail["value"] = value
             detail["display_value"] = value
+            if payload.document_family == "ruspina_reinvoice_v1":
+                detail["normalized_value"] = normalize_ruspina_review_value(field_name, value)
             if not detail.get("source"):
                 detail["source"] = "human correction"
             if detail.get("confidence") is None:
                 detail["confidence"] = 1.0
-            if field_name in TRADENET_DECIMAL_FIELDS:
+            if payload.document_family in TRADENET_EDITABLE_FAMILIES and field_name in TRADENET_DECIMAL_FIELDS:
                 try:
                     decimal_value = Decimal(value) if value is not None else None
                     if decimal_value is not None and not decimal_value.is_finite():
@@ -493,14 +507,37 @@ def load_correction_records() -> list[dict[str, Any]]:
     return records
 
 
-def load_tradenet_field_corrections(document_id: str) -> dict[str, dict[str, Any]]:
-    """Return the latest saved customs review values for one stable logical document."""
+def load_review_field_corrections(document_id: str, document_family: str) -> dict[str, dict[str, Any]]:
+    """Return latest allowlisted review edits for one stable family/document pair."""
     latest: dict[str, dict[str, Any]] = {}
+    allowed_fields = REVIEW_EDITABLE_FIELDS_BY_FAMILY.get(document_family, frozenset())
     for record in load_correction_records():
         field_name = record.get("field_name")
-        if record.get("document_id") == document_id and record.get("document_family") in TRADENET_EDITABLE_FAMILIES \
-                and field_name in TRADENET_EDITABLE_FIELDS and record.get("user_action", "edited") in {"edited", "accepted"}:
+        if record.get("document_id") == document_id and record.get("document_family") == document_family \
+                and field_name in allowed_fields and record.get("user_action", "edited") in {"edited", "accepted"}:
             latest[field_name] = record
+    return latest
+
+
+def normalize_ruspina_review_value(field_name: str, value: Any) -> Any:
+    """Keep editable RUSPINA display text while refreshing its comparable value."""
+    if value is None:
+        return None
+    if field_name not in RUSPINA_NUMERIC_REVIEW_FIELDS:
+        return str(value).strip()
+    parsed = parse_amount(str(value))
+    if field_name == "number_of_bags":
+        return int(parsed) if parsed is not None and parsed.is_integer() else None
+    return parsed
+
+
+def load_tradenet_field_corrections(document_id: str) -> dict[str, dict[str, Any]]:
+    """Backward-compatible loader for TradeNet review correction records."""
+    # The historical TradeNet record format is shared with other family-specific
+    # review fields, but this compatibility helper stays customs-scoped.
+    latest: dict[str, dict[str, Any]] = {}
+    for family in TRADENET_EDITABLE_FAMILIES:
+        latest.update(load_review_field_corrections(document_id, family))
     return latest
 
 
