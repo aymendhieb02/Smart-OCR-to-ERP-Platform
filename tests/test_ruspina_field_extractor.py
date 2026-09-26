@@ -132,6 +132,7 @@ def test_currency_total_and_table_prices_have_separate_printed_evidence():
     assert result.fields["currency"].value == "EUR"
     assert "EUR" in result.fields["currency"].evidence_text
     assert result.fields["total"].value == 12500.0
+    assert result.fields["total"].display_value == "12 500.00"
     assert result.fields["total"].evidence_text == "12 500.00EUR"
     assert result.fields["unit_price"].value == 50.0
     assert result.fields["line_total"].value == 12500.0
@@ -160,10 +161,13 @@ def test_unrelated_money_line_outside_total_cell_cannot_override_total():
 def test_gross_net_and_bag_count_are_independent_labelled_values():
     result = _extract(_form())
     assert result.fields["gross_weight"].value == 250.0
+    assert result.fields["gross_weight"].display_value == "250T"
     assert result.fields["gross_weight"].evidence_text == "GROSS WEIGHT:\n250T"
     assert result.fields["net_weight"].value == 240.0
+    assert result.fields["net_weight"].display_value == "240T"
     assert result.fields["net_weight"].evidence_text == "NET WEIGHT:\n240T"
     assert result.fields["number_of_bags"].value == 5000
+    assert result.fields["number_of_bags"].display_value == "5 000"
 
 
 def test_equal_gross_and_net_are_still_sourced_from_distinct_lines():

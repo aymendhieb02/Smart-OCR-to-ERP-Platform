@@ -21,7 +21,7 @@ from app.services.ruspina_field_extractor import extract_ruspina_fields
 from app.services.dossier_reconciler import reconcile_dossier
 from app.core.canonical_parties import canonicalize_party
 from app.services.correction_identity import correction_document_id
-from app.services.correction_store import load_tradenet_field_corrections
+from app.services.correction_store import load_review_field_corrections, normalize_ruspina_review_value
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -188,11 +188,11 @@ def process_dossier_file(
                     and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
                 ),
             )
-            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
+            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1"}:
                 if path.is_file():
                     stable_document_id = correction_document_id(path, group.group_id)
-                    persisted = load_tradenet_field_corrections(stable_document_id)
-                    _apply_tradenet_corrections(response, persisted)
+                    persisted = load_review_field_corrections(stable_document_id, group.document_family)
+                    _apply_family_review_corrections(response, persisted, group.document_family)
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
     return DossierProcessResult(
@@ -207,7 +207,11 @@ def process_dossier_file(
     )
 
 
-def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: dict[str, dict]) -> None:
+def _apply_family_review_corrections(
+    response: ProcessInvoiceResponse,
+    corrections: dict[str, dict],
+    document_family: str | None = None,
+) -> None:
     for field_name, record in corrections.items():
         detail = response.expanded_fields.get(field_name)
         if detail is None:
@@ -217,6 +221,8 @@ def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: d
             detail.machine_value = detail.value
         detail.value = record.get("corrected_value")
         detail.display_value = str(detail.value) if detail.value is not None else ""
+        if document_family == "ruspina_reinvoice_v1":
+            detail.normalized_value = normalize_ruspina_review_value(field_name, detail.value)
         if not detail.source:
             detail.source = "human correction"
         if detail.confidence is None:
@@ -233,6 +239,11 @@ def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: d
             for row in table.rows:
                 if row.key == field_name:
                     row.value = detail.value
+
+
+def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: dict[str, dict]) -> None:
+    """Backward-compatible alias retained for existing TradeNet callers/tests."""
+    _apply_family_review_corrections(response, corrections)
 
 
 def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -> str | None:

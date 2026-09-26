@@ -45,6 +45,11 @@ const INVOICE_FIELD_GROUPS = [
   "customer_name", "customer_address", "customer_tax_id", "currency", "amount_ht",
   "tva_amount", "amount_ttc", "tax_rate", "purchase_order_number",
 ];
+const RUSPINA_REVIEW_FIELDS = Object.freeze([
+  "invoice_number", "invoice_date", "referenced_invoice", "client", "address", "currency", "total",
+  "total_amount_words", "gross_weight", "net_weight", "number_of_bags", "delivery", "origin",
+  "payment", "iban", "bank", "swift",
+]);
 const CUSTOMS_TRADENET_REVIEW_FIELDS = Object.freeze([
   "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
   "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
@@ -52,7 +57,7 @@ const CUSTOMS_TRADENET_REVIEW_FIELDS = Object.freeze([
 const DOCUMENT_PRESENTATION = Object.freeze({
   customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
   customs_douanes_tunisiennes_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
-  ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
+  ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: RUSPINA_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
   commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   customs_declaration: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
   unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
@@ -75,8 +80,22 @@ const EDITABLE_FIELDS = [
   "customer_email",
   "invoice_number",
   "invoice_date",
+  "referenced_invoice",
   "due_date",
   "currency",
+  "client",
+  "address",
+  "total",
+  "total_amount_words",
+  "gross_weight",
+  "net_weight",
+  "number_of_bags",
+  "delivery",
+  "origin",
+  "payment",
+  "iban",
+  "bank",
+  "swift",
   "amount_ht",
   "tva_amount",
   "amount_ttc",
@@ -737,7 +756,7 @@ function renderFields(fields) {
       validationNote.textContent = t(numericValidation.valid ? "fields.decimal_valid" : "fields.decimal_invalid");
       value.appendChild(validationNote);
     }
-    if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1"].includes(presentation.key) && detail) {
+    if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1"].includes(presentation.key) && detail) {
       const evidence = document.createElement("details");
       evidence.className = "field-source-evidence";
       const summary = document.createElement("summary");
@@ -1075,7 +1094,7 @@ function resetCorrections() {
 
 function updateReviewField(field, rawValue) {
   if (!lastResponse) return;
-  const value = coerceValue(field, rawValue);
+  const value = reviewFieldValue(field, rawValue);
   lastResponse.detected_fields = lastResponse.detected_fields || {};
   lastResponse.detected_fields[field] = value;
   const previousCorrection = correctedFields[field] || {};
@@ -1096,6 +1115,15 @@ function updateReviewField(field, rawValue) {
 function getFieldOriginalValue(field) {
   const detail = lastResponse?.expanded_fields?.[field];
   return detail?.display_value ?? detail?.value ?? lastResponse?.detected_fields?.[field] ?? null;
+}
+
+function reviewFieldValue(field, rawValue) {
+  if (resolveDocumentPresentation().key === "ruspina_reinvoice_v1"
+      && ["total", "gross_weight", "net_weight", "number_of_bags"].includes(field)) {
+    const value = String(rawValue ?? "").trim();
+    return value || null;
+  }
+  return coerceValue(field, rawValue);
 }
 
 function applyFieldToErpJson(field, value) {
@@ -1128,10 +1156,12 @@ function syncFlatExport(field, value) {
 function syncExpandedField(field, value) {
   lastResponse.expanded_fields = lastResponse.expanded_fields || {};
   if (!lastResponse.expanded_fields[field]) lastResponse.expanded_fields[field] = { value: null, evidence_text: null };
-  lastResponse.expanded_fields[field].value = value;
-  lastResponse.expanded_fields[field].display_value = value === null || value === undefined ? "" : String(value);
-  lastResponse.expanded_fields[field].source = "manual correction";
-  lastResponse.expanded_fields[field].confidence = 1;
+  const detail = lastResponse.expanded_fields[field];
+  if (detail.machine_value === null || detail.machine_value === undefined) detail.machine_value = detail.value;
+  detail.value = value;
+  detail.display_value = value === null || value === undefined ? "" : String(value);
+  if (!detail.source) detail.source = "manual correction";
+  if (detail.confidence === null || detail.confidence === undefined) detail.confidence = 1;
 }
 
 function syncDynamicFieldRows(field, value) {
@@ -2031,6 +2061,18 @@ function refreshValidationHeader() {
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
+  if (resolveDocumentPresentation().key === "ruspina_reinvoice_v1") {
+    lastResponse.expanded_fields = lastResponse.expanded_fields || {};
+    Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
+      lastResponse.expanded_fields[name] = detail;
+      correctedFields[name] = {
+        ...(correctedFields[name] || {}),
+        corrected_value: detail.display_value ?? detail.value,
+        corrected_by: "human",
+        persisted: true,
+      };
+    });
+  }
   if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1"].includes(resolveDocumentPresentation().key)) {
     lastResponse.expanded_fields = lastResponse.expanded_fields || {};
     Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
@@ -2158,7 +2200,7 @@ function buildCorrectedFieldPayload() {
   const corrected = {};
   document.querySelectorAll("[data-field]").forEach((input) => {
     const field = input.dataset.field;
-    const current = coerceValue(field, input.value);
+    const current = reviewFieldValue(field, input.value);
     const previous = correctedFields[field] || {};
     const original = previous.original_value ?? getFieldOriginalValue(field);
     if (current !== undefined && String(current ?? "") !== String(original ?? "")) {
