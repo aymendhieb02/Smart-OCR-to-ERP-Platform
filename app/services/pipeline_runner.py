@@ -188,7 +188,7 @@ def process_dossier_file(
                     and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
                 ),
             )
-            if group.document_family == "customs_tradenet_v1":
+            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
                 if path.is_file():
                     stable_document_id = correction_document_id(path, group.group_id)
                     persisted = load_tradenet_field_corrections(stable_document_id)
@@ -217,8 +217,10 @@ def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: d
             detail.machine_value = detail.value
         detail.value = record.get("corrected_value")
         detail.display_value = str(detail.value) if detail.value is not None else ""
-        detail.source = "human correction"
-        detail.confidence = 1.0
+        if not detail.source:
+            detail.source = "human correction"
+        if detail.confidence is None:
+            detail.confidence = 1.0
         if field_name in {"ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd"}:
             try:
                 detail.normalized_value = Decimal(str(detail.value)) if detail.value is not None else None
@@ -227,14 +229,10 @@ def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: d
         for box in response.field_boxes:
             if box.field == field_name:
                 box.value = detail.value
-                box.source = "human correction"
-                box.confidence = 1.0
         for table in response.dynamic_tables:
             for row in table.rows:
                 if row.key == field_name:
                     row.value = detail.value
-                    row.source = "human correction"
-                    row.confidence = 1.0
 
 
 def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -> str | None:
@@ -248,10 +246,10 @@ def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -
     detail.machine_value = raw_importer
     if reason:
         detail.canonical_value = effective
+        detail.canonicalization_reason = reason
         detail.normalized_value = effective
         detail.value = effective
         detail.display_value = effective
-        detail.source = f"{detail.source or 'TradeNet OCR'}; {reason}"
     return reason
 
 

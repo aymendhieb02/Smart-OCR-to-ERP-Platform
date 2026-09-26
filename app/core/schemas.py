@@ -160,6 +160,7 @@ class FieldExtractionDetail(BaseModel):
     display_value: str | None = None
     machine_value: Any = None
     canonical_value: Any = None
+    canonicalization_reason: str | None = None
     confidence: float | None = None
     bbox: BoundingBox | None = None
     page: int | None = None
