@@ -32,6 +32,7 @@ from app.services.row_validation_engine import summarize_rows, validate_rows
 from app.services.validation_explainer import build_validation_explanation
 from app.services.validator import validate_invoice
 from app.utils.helpers import parse_amount
+from app.services.producer_invoice_review import PRODUCER_REVIEW_FIELDS
 
 CORRECTION_DIR = settings.output_dir / "corrections"
 CORRECTION_FILE = CORRECTION_DIR / "corrections.jsonl"
@@ -50,6 +51,7 @@ RUSPINA_NUMERIC_REVIEW_FIELDS = frozenset({"total", "gross_weight", "net_weight"
 REVIEW_EDITABLE_FIELDS_BY_FAMILY = {
     **{family: TRADENET_EDITABLE_FIELDS for family in TRADENET_EDITABLE_FAMILIES},
     "ruspina_reinvoice_v1": RUSPINA_REVIEW_FIELDS,
+    **{family: frozenset(fields) for family, fields in PRODUCER_REVIEW_FIELDS.items()},
 }
 
 FIELD_TYPES = {
@@ -164,21 +166,47 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
         reviewed_rows = _reviewed_line_item_keys(payload)
         fields.line_items = _review_line_items(payload.line_item_corrections, payload.ignored_rows, reviewed_rows)
         _recompute_amounts_from_line_items(fields)
+        original_rows = (payload.original_payload or {}).get("original_line_items") or []
         for index, item in enumerate(fields.line_items):
-            records.append(CorrectionItem(
-                document_id=document_id,
-                field_name=f"line_items[{index}]",
-                original_value=None,
-                corrected_value=item.model_dump(mode="json"),
-                original_bbox=item.bbox,
-                page=item.page,
-                confidence=item.confidence,
-                source_file=source_file,
-                source=item.source or "human",
-                correction_type="line_item",
-                user_action="edited",
-                line_item_index=index,
-            ))
+            corrected_row = item.model_dump(mode="json")
+            original_row = original_rows[index] if index < len(original_rows) and isinstance(original_rows[index], dict) else {}
+            if payload.document_family in PRODUCER_REVIEW_FIELDS:
+                for field_name, corrected_value in corrected_row.items():
+                    if field_name not in {"description", "quantity", "unit", "unit_price", "line_total_ht", "line_total_ttc", "total"}:
+                        continue
+                    original_value = original_row.get(field_name)
+                    if corrected_value == original_value:
+                        continue
+                    records.append(CorrectionItem(
+                        document_id=document_id,
+                        document_family=payload.document_family,
+                        field_name=f"line_items[{index}].{field_name}",
+                        original_value=original_value,
+                        corrected_value=corrected_value,
+                        original_bbox=original_row.get("bbox", item.bbox),
+                        page=original_row.get("page", item.page),
+                        confidence=original_row.get("confidence", item.confidence),
+                        source_file=source_file,
+                        source="human",
+                        correction_type="line_item",
+                        user_action="edited",
+                        line_item_index=index,
+                    ))
+            else:
+                records.append(CorrectionItem(
+                    document_id=document_id,
+                    field_name=f"line_items[{index}]",
+                    original_value=None,
+                    corrected_value=corrected_row,
+                    original_bbox=item.bbox,
+                    page=item.page,
+                    confidence=item.confidence,
+                    source_file=source_file,
+                    source=item.source or "human",
+                    correction_type="line_item",
+                    user_action="edited",
+                    line_item_index=index,
+                ))
     for ignored in payload.ignored_rows:
         records.append(CorrectionItem(
             document_id=document_id,
@@ -516,6 +544,24 @@ def load_review_field_corrections(document_id: str, document_family: str) -> dic
         if record.get("document_id") == document_id and record.get("document_family") == document_family \
                 and field_name in allowed_fields and record.get("user_action", "edited") in {"edited", "accepted"}:
             latest[field_name] = record
+    return latest
+
+
+def load_review_line_item_corrections(document_id: str, document_family: str) -> dict[int, dict[str, Any]]:
+    """Return latest per-cell corrections for rows of one logical document."""
+    latest: dict[int, dict[str, Any]] = {}
+    if document_family not in PRODUCER_REVIEW_FIELDS:
+        return latest
+    for record in load_correction_records():
+        if (record.get("document_id") != document_id
+                or record.get("document_family") != document_family
+                or record.get("correction_type") != "line_item"
+                or record.get("user_action", "edited") not in {"edited", "accepted"}):
+            continue
+        index = record.get("line_item_index")
+        field_name = record.get("field_name", "")
+        if isinstance(index, int) and field_name.startswith(f"line_items[{index}]."):
+            latest.setdefault(index, {})[field_name.split(".", 1)[1]] = record
     return latest
 
 
