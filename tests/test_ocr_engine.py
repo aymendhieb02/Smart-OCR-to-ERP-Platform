@@ -274,6 +274,29 @@ def test_fallback_regions_preserve_original_physical_page_number(monkeypatch):
     assert {line.page_number for line in lines} == {3}
 
 
+def test_targeted_region_uses_existing_regional_ocr_and_maps_page_bbox(monkeypatch):
+    from app.services.table_regions import build_label_value_region
+
+    result = [[[[5, 5], [65, 5], [65, 20], [5, 20]], ("12.345,67", 0.94)]]
+    paddle = DummyPaddle(result)
+    monkeypatch.setattr("app.services.ocr_engine._get_paddle_instance", lambda: paddle)
+    image = np.zeros((800, 1000, 3), dtype=np.uint8)
+    label = BoundingBox(x1=600, y1=400, x2=700, y2=420)
+    region = build_label_value_region(image, label, name="sotacib_total_ht_value_cell")
+
+    engine = OCREngine(use_disk_cache=False)
+    lines = engine.run_targeted_region(image, region, page_number=3)
+
+    assert paddle.calls == 1
+    assert len(lines) == 1
+    assert lines[0].text == "12.345,67"
+    assert lines[0].page_number == 3
+    assert lines[0].source == "regional_fallback"
+    assert lines[0].bbox.x1 >= region.x_offset
+    assert lines[0].bbox.y1 >= region.y_offset
+    assert engine.fallback_region_count == 1
+
+
 def test_fallback_page_number_count_must_match_images():
     engine = OCREngine(use_disk_cache=False)
 

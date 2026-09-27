@@ -60,8 +60,9 @@ def test_family_source_labels_map_to_distinct_canonical_amount_and_tariff_concep
     )
     family = next(iter(SOTACIB_FAMILIES))
     apply_producer_review_fields(response, family)
-    assert response.expanded_fields["total_ht"].value == 123.0
-    assert response.expanded_fields["total_ht"].display_value == "123,000"
+    # A legacy amount_ht value without total-HT label evidence is not
+    # promoted to the canonical producer total_ht concept.
+    assert response.expanded_fields["total_ht"].value is None
     assert response.expanded_fields["hs_code"].value == "HS-TEST"
     assert response.expanded_fields["total"].value is None
 
@@ -208,7 +209,7 @@ def test_producer_ui_has_family_scoped_editable_keys_and_french_labels():
         assert family in app_js
         assert all(f'"{field}"' in app_js for field in fields)
     for key, label in {
-        "seller": "Fournisseur", "invoice_number": "Numéro de facture", "invoice_date": "Date de facture",
+        "seller": "Vendeur", "invoice_number": "Numéro de facture", "invoice_date": "Date de facture",
         "client": "Client", "client_address": "Adresse du client", "consignee": "Destinataire",
         "currency": "Devise", "total": "Montant total", "total_amount_words": "Montant total en lettres",
         "hs_code": "Code HS", "incoterm": "Incoterm", "origin": "Origine", "destination": "Destination",

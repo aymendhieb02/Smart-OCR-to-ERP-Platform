@@ -12,6 +12,10 @@ def validate_invoice(
     fields: ExtractedInvoiceFields,
     ocr_result: OCRResult | None = None,
     document_type: str | DocumentClassification = "invoice",
+    *,
+    producer_invoice: bool = False,
+    producer_total: float | None = None,
+    producer_tax_applicable: bool = False,
 ) -> ValidationResult:
     if isinstance(document_type, DocumentClassification):
         document_type = document_type.document_type
@@ -29,7 +33,7 @@ def validate_invoice(
     elif fields.invoice_date > date.today():
         warnings.append("Document date is in the future")
 
-    if document_type in {"invoice", "credit_note", "receipt"}:
+    if document_type in {"invoice", "credit_note", "receipt"} and not (producer_invoice and producer_total is not None):
         if fields.amount_ttc is None:
             warnings.append("Total amount TTC is missing")
         elif document_type != "credit_note" and fields.amount_ttc <= 0:
@@ -45,9 +49,11 @@ def validate_invoice(
         elif mismatch > 0.01:
             warnings.append(f"Small amount rounding difference: HT + TVA = {expected}, TTC = {fields.amount_ttc}")
     elif document_type == "invoice":
-        warnings.append("One or more amount fields are missing, total consistency could not be fully checked")
+        warnings.append("Insufficient semantically valid totals for complete financial consistency check" if producer_invoice else "One or more amount fields are missing, total consistency could not be fully checked")
 
-    if document_type == "invoice" and fields.tax_rate is None:
+    if producer_invoice and not producer_tax_applicable:
+        pass
+    elif document_type == "invoice" and fields.tax_rate is None:
         warnings.append("Tax rate is missing")
     elif fields.tax_rate is not None and min(abs(fields.tax_rate - rate) for rate in REASONABLE_TAX_RATES) > 0.5:
         warnings.append(f"Suspicious tax rate: {fields.tax_rate}%")

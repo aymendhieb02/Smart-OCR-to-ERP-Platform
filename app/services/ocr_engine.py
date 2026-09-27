@@ -160,6 +160,23 @@ class OCREngine:
         self._publish_cache_metrics()
         return lines
 
+    def run_targeted_region(self, image: np.ndarray, region: OCRRegion, *, page_number: int) -> list[OCRLine]:
+        """Run OCR once on a caller-built, label-relative page crop."""
+        if image is None or region.image.size == 0:
+            return []
+        started = time.perf_counter()
+        paddle = _get_paddle_instance()
+        region_lines, _elapsed, _from_memory = self._run_paddle_region(
+            paddle, region, page_number, source="regional_fallback",
+        )
+        for index, line in enumerate(region_lines):
+            line.line_index = index
+            line.source = "regional_fallback"
+        self.fallback_region_count += 1
+        self.last_timings["targeted_fallback_ocr_inference"] = round(time.perf_counter() - started, 4)
+        self._publish_cache_metrics()
+        return region_lines
+
     def _regions_for_mode(self, image: np.ndarray) -> list[OCRRegion]:
         regions = build_ocr_regions(image)
         if self.mode in {"fast", "balanced"}:

@@ -89,6 +89,14 @@ const PRODUCER_FIELD_GROUPS = Object.freeze({
     ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
     ["payment", ["bank_account", "payment_method", "payment_terms"]],
   ],
+  commercial_invoice: [
+    ["invoice", ["seller", "invoice_number", "invoice_date"]],
+    ["client", ["client", "client_address", "consignee"]],
+    ["amounts", ["currency", "total", "total_amount_words"]],
+    ["product", ["hs_code", "packaging"]],
+    ["logistics", ["incoterm", "origin", "destination"]],
+    ["payment", ["payment"]],
+  ],
 });
 const DOCUMENT_PRESENTATION = Object.freeze({
   customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
@@ -97,7 +105,7 @@ const DOCUMENT_PRESENTATION = Object.freeze({
   ciments_enfidha_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: ENFIDHA_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   sotacib_kairouan_grey_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   sotacib_kasserine_white_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
-  commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
+  commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: PRODUCER_COMMON_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   customs_declaration: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
   unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
 });
@@ -1059,7 +1067,7 @@ function renderLineItems(items, rowValidation = []) {
     return;
   }
   const editableItems = items || [];
-  const producerInvoice = ["ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(presentation.key);
+  const producerInvoice = ["commercial_invoice", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(presentation.key);
   if (lastResponse) {
     lastResponse.detected_fields = lastResponse.detected_fields || {};
     lastResponse.detected_fields.line_items = editableItems;
@@ -2108,10 +2116,11 @@ function stableIgnoredRows() {
 
 function buildReviewCorrectionPayload() {
   const logicalDocument = getSelectedLogicalDocument();
+  const presentation = resolveDocumentPresentation(logicalDocument);
   return {
     document_id: logicalDocument?.correction_document_id || logicalDocument?.logical_document_id || lastResponse.erp_json?.metadata?.source_file || lastResponse.document_preview?.source_file || null,
     source_file: lastResponse.erp_json?.metadata?.source_file || null,
-    document_family: logicalDocument?.document_family || null,
+    document_family: presentation.key === "commercial_invoice" ? "general_supplier_invoice" : (logicalDocument?.document_family || null),
     detected_fields: lastResponse.detected_fields || {},
     field_corrections: buildCorrectedFieldPayload(),
     line_item_corrections: lastResponse.detected_fields?.line_items || [],
@@ -2136,7 +2145,7 @@ function refreshValidationHeader() {
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
-  if (["ruspina_reinvoice_v1", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(resolveDocumentPresentation().key)) {
+  if (["commercial_invoice", "ruspina_reinvoice_v1", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(resolveDocumentPresentation().key)) {
     lastResponse.expanded_fields = lastResponse.expanded_fields || {};
     Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
       lastResponse.expanded_fields[name] = detail;
