@@ -73,7 +73,7 @@ def test_ruspina_review_configuration_is_exact_editable_and_keeps_table_separate
 
 def test_producer_and_tradenet_review_configurations_remain_unchanged():
     script = Path("app/static/app.js").read_text(encoding="utf-8")
-    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS' in script
+    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: PRODUCER_COMMON_REVIEW_FIELDS' in script
     assert 'customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS' in script
     assert 'customs_douanes_tunisiennes_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS' in script
 

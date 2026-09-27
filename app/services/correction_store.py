@@ -218,7 +218,14 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
             user_action="rejected",
         ))
 
-    validation = validate_invoice(fields, None, "invoice")
+    producer_review = payload.document_family in PRODUCER_REVIEW_FIELDS
+    producer_total_detail = expanded_field_overrides.get("total") or (payload.original_payload or {}).get("expanded_fields", {}).get("total", {})
+    producer_total = parse_amount(str(producer_total_detail.get("value"))) if producer_total_detail.get("value") not in (None, "") else None
+    validation = validate_invoice(
+        fields, None, "invoice", producer_invoice=producer_review,
+        producer_total=producer_total,
+        producer_tax_applicable=bool(fields.tax_rate is not None or fields.tva_amount is not None),
+    )
     if numeric_errors:
         validation.warnings.extend(f"{field} must contain a valid decimal value." for field in numeric_errors)
     row_validation = validate_rows(fields.line_items)

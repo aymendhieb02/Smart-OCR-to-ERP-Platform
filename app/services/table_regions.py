@@ -26,6 +26,40 @@ def build_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     return _dedupe_regions(regions)
 
 
+def build_label_value_region(
+    image: np.ndarray,
+    label_bbox,
+    *,
+    name: str,
+    page_width: int | None = None,
+    page_height: int | None = None,
+) -> OCRRegion | None:
+    """Build a narrow right-hand value-cell crop anchored to an OCR label."""
+    height, width = image.shape[:2]
+    if height < 1 or width < 1 or label_bbox is None:
+        return None
+    scale_x = width / float(page_width) if page_width else 1.0
+    scale_y = height / float(page_height) if page_height else 1.0
+    label_x2 = float(label_bbox.x2) * scale_x
+    label_y1 = float(label_bbox.y1) * scale_y
+    label_y2 = float(label_bbox.y2) * scale_y
+    label_height = max(1.0, label_y2 - label_y1)
+
+    # Value cells for this label are to the right on the same row. Keep the
+    # crop bounded by the page edge and a small vertical band around the label.
+    left = max(0, min(width - 1, int(round(label_x2 + max(8.0, width * 0.008)))))
+    right = max(left + 1, min(width, int(round(width * 0.985))))
+    # Extra vertical margin keeps descenders/decimal punctuation inside the
+    # crop while remaining tied to the label's own OCR geometry.
+    half_band = max(label_height * 2.5, height * 0.018)
+    center_y = (label_y1 + label_y2) / 2
+    top = max(0, int(round(center_y - half_band)))
+    bottom = min(height, int(round(center_y + half_band)))
+    if right - left < width * 0.08 or bottom <= top:
+        return None
+    return OCRRegion(name, image[top:bottom, left:right], left, top, (left, top, right, bottom))
+
+
 def build_tradenet_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     """Small, normalized crops for the recurring TradeNet declaration form."""
     return [

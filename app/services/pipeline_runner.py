@@ -18,7 +18,12 @@ from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.ruspina_field_extractor import extract_ruspina_fields
-from app.services.producer_invoice_review import PRODUCER_REVIEW_FIELDS, apply_producer_review_fields
+from app.services.producer_invoice_review import (
+    ENFIDHA_FAMILY, GENERAL_PRODUCER_FAMILY, PRODUCER_REVIEW_FIELDS,
+    SOTACIB_FAMILIES, apply_producer_review_fields, prepare_producer_fields,
+    recover_sotacib_total_ht,
+)
+from app.services.producer_table_reader import extract_producer_table_items
 from app.services.dossier_reconciler import reconcile_dossier
 from app.core.canonical_parties import canonicalize_party
 from app.services.correction_identity import correction_document_id
@@ -184,18 +189,21 @@ def process_dossier_file(
                 timing_recorder=timer,
                 physical_page_numbers=group.pages,
                 document_family=group.document_family,
+                producer_invoice=(group.document_type == "commercial_invoice" and group.document_family != "ruspina_reinvoice_v1"),
                 fixed_customs_form=(
                     group.document_type == "customs_declaration"
                     and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
                 ),
             )
-            apply_producer_review_fields(response, group.document_family, logical_ocr.lines)
-            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1", *PRODUCER_REVIEW_FIELDS}:
+            review_family = group.document_family
+            if group.document_type == "commercial_invoice" and group.document_family != "ruspina_reinvoice_v1":
+                review_family = group.document_family if group.document_family in PRODUCER_REVIEW_FIELDS else GENERAL_PRODUCER_FAMILY
+            if review_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1", *PRODUCER_REVIEW_FIELDS}:
                 if path.is_file():
                     stable_document_id = correction_document_id(path, group.group_id)
-                    persisted = load_review_field_corrections(stable_document_id, group.document_family)
-                    _apply_family_review_corrections(response, persisted, group.document_family)
-                    line_item_corrections = load_review_line_item_corrections(stable_document_id, group.document_family)
+                    persisted = load_review_field_corrections(stable_document_id, review_family)
+                    _apply_family_review_corrections(response, persisted, review_family)
+                    line_item_corrections = load_review_line_item_corrections(stable_document_id, review_family)
                     _apply_producer_line_item_corrections(response, line_item_corrections)
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
@@ -341,7 +349,7 @@ def process_loaded_document(
     return _process_ocr_document(document, ocr_result, timings=timings, include_preview=False, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
-def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None, document_family: str | None = None, fixed_customs_form: bool = False) -> ProcessInvoiceResponse:
+def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], include_preview: bool, persist_erp_json: bool, ocr_engine: OCREngine | None = None, timing_recorder: PipelineTimer | None = None, physical_page_numbers: tuple[int, ...] | list[int] | None = None, document_family: str | None = None, fixed_customs_form: bool = False, producer_invoice: bool = False) -> ProcessInvoiceResponse:
     timer = timing_recorder
     with _timer_stage(timer, "response_preparation", part="preview_generation"):
         document_preview = generate_document_preview(document) if include_preview else None
@@ -402,6 +410,34 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
                 }
                 timings.update(getattr(ocr_engine, "last_timings", {}))
     timings["field_extraction"] = round(time.perf_counter() - stage_started, 4)
+    is_producer_invoice = producer_invoice or (
+        document_family in {ENFIDHA_FAMILY, *SOTACIB_FAMILIES}
+        or (document_family is None and classification.document_type in {"invoice", "credit_note"})
+    )
+    producer_semantics = {}
+    sotacib_total_ht_fallback = {"attempted": False, "reason": "not_applicable"}
+    if is_producer_invoice and document_family != "ruspina_reinvoice_v1":
+        producer_semantics = prepare_producer_fields(fields, ocr_result.lines, document_family)
+        if document_family in SOTACIB_FAMILIES:
+            total_ht_detail, targeted_lines, sotacib_total_ht_fallback = recover_sotacib_total_ht(
+                ocr_result.lines, document_family, document.images, ocr_engine,
+                physical_page_numbers=physical_page_numbers,
+            )
+            if total_ht_detail and total_ht_detail.value not in (None, ""):
+                producer_semantics["total_ht"] = total_ht_detail
+            if targeted_lines:
+                ocr_result = _merge_ocr_result(ocr_result, targeted_lines)
+        generic_table_rows = extract_producer_table_items(ocr_result.lines)
+        if generic_table_rows:
+            fields.line_items = generic_table_rows
+        extraction_debug["producer_semantic_fields"] = sorted(producer_semantics)
+        extraction_debug["producer_table_reader"] = {
+            "strategy": "generic semantic header and geometry",
+            "rows": len(generic_table_rows),
+            "replaced_legacy_rows": bool(generic_table_rows),
+        }
+        if document_family in SOTACIB_FAMILIES:
+            extraction_debug["sotacib_total_ht_fallback"] = sotacib_total_ht_fallback
     ruspina = None
     if document_family == "ruspina_reinvoice_v1":
         ruspina_started = time.perf_counter()
@@ -466,7 +502,13 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     extraction_debug["layout_model"] = layout_model_debug
     extraction_debug["layout_retry"] = layout_retry_debug
     with _timer_stage(timer, "financial_validation", part="validate_invoice"):
-        validation = validate_invoice(fields, ocr_result, classification)
+        producer_total = producer_semantics.get("total")
+        validation = validate_invoice(
+            fields, ocr_result, classification,
+            producer_invoice=is_producer_invoice,
+            producer_total=float(producer_total.value) if producer_total and producer_total.value is not None else None,
+            producer_tax_applicable=bool(fields.tax_rate is not None or fields.tva_amount is not None),
+        )
     timings["table_extraction"] = round(time.perf_counter() - stage_started, 4)
     table_debug = extraction_debug.setdefault("table_extraction_debug", {})
     table_debug["validated_rows"] = [item.model_dump(mode="json") for item in quality_gate.line_items_validated]
@@ -630,6 +672,9 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             duplicate_detection=duplicate_detection,
             fraud_indicators=fraud,
         )
+        if is_producer_invoice and document_family != "ruspina_reinvoice_v1":
+            apply_producer_review_fields(response, document_family, ocr_result.lines)
+            response.field_boxes = build_field_boxes(response.expanded_fields)
         apply_public_bbox_contract(response)
         response.review_assistant = build_review_assistant(response)
     timings["public_boxes_count"] = count_public_ocr_boxes(response)
