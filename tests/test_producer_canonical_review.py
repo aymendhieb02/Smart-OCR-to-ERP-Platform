@@ -209,7 +209,7 @@ def test_producer_ui_has_family_scoped_editable_keys_and_french_labels():
         assert family in app_js
         assert all(f'"{field}"' in app_js for field in fields)
     for key, label in {
-        "seller": "Vendeur", "invoice_number": "Numéro de facture", "invoice_date": "Date de facture",
+        "seller": "Fournisseur", "invoice_number": "Numéro de facture", "invoice_date": "Date de facture",
         "client": "Client", "client_address": "Adresse du client", "consignee": "Destinataire",
         "currency": "Devise", "total": "Montant total", "total_amount_words": "Montant total en lettres",
         "hs_code": "Code HS", "incoterm": "Incoterm", "origin": "Origine", "destination": "Destination",
@@ -219,6 +219,110 @@ def test_producer_ui_has_family_scoped_editable_keys_and_french_labels():
     }.items():
         assert f'"fields.{key}": "{label}"' in strings
     assert "producerVisibleReviewGroups" in app_js
-    assert '["line_total", item.line_total_ttc ?? item.line_total_ht ?? item.total' in app_js
+    assert '["line_total", item.line_total ?? item.total' in app_js
     assert "line_total_ttc" in app_js and "line_total_ht" in app_js
     assert '"line_items.total_line": "Total ligne"' in strings
+
+
+def test_producer_review_contract_has_canonical_general_allowlist_and_optional_detected_extensions():
+    from pathlib import Path
+
+    app_js = Path("app/static/app.js").read_text(encoding="utf-8")
+    common = set(PRODUCER_REVIEW_FIELDS["general_supplier_invoice"])
+    assert "fields: [...GENERAL_PRODUCER_REVIEW_FIELDS, ...PRODUCER_OPTIONAL_EXTENSION_FIELDS]" in app_js
+    assert "const presentExtensions = PRODUCER_OPTIONAL_EXTENSION_FIELDS.filter" in app_js
+    assert 'String(value).trim() !== ""' in app_js
+    assert "const PRODUCER_COMMON_REVIEW_FIELDS" in app_js
+    assert common.issubset(set(PRODUCER_REVIEW_FIELDS["general_supplier_invoice"]))
+    assert 'const statusKey = corrected ? "status.manually_corrected"' in app_js
+    assert ': !present ? "status.not_extracted"' in app_js
+    assert ': explicitReview ? "status.needs_review" : "status.confirmed"' in app_js
+    assert "renderProducerFieldStatus(field, input.value)" in app_js
+    strings = Path("app/static/strings.js").read_text(encoding="utf-8")
+    assert '"producer.section.consignee"' in strings
+    assert 'Number(confidence) >= PRODUCER_FIELD_REVIEW_CONFIDENCE_THRESHOLD' in app_js
+    assert 'const PRODUCER_FIELD_REVIEW_CONFIDENCE_THRESHOLD = 0.65' in app_js
+    assert "status.needs_review" in app_js
+    assert 'fieldReport?.accepted === false' in app_js
+
+
+def test_frontend_producer_allowlists_exclude_legacy_tax_fields_and_sotacib_supplier_tax_id():
+    import re
+    from pathlib import Path
+
+    app_js = Path("app/static/app.js").read_text(encoding="utf-8")
+    common_block = app_js.split("const GENERAL_PRODUCER_REVIEW_FIELDS = Object.freeze([", 1)[1].split("]);", 1)[0]
+    sotacib_block = app_js.split("const SOTACIB_REVIEW_FIELDS = Object.freeze([", 1)[1].split("]);", 1)[0]
+    common = set(re.findall(r'"([a-z_]+)"', common_block))
+    sotacib = set(re.findall(r'"([a-z_]+)"', sotacib_block))
+    sotacib |= set(re.findall(r'"([a-z_]+)"', app_js.split("const PRODUCER_COMMON_REVIEW_FIELDS = Object.freeze([", 1)[1].split("]);", 1)[0]))
+    assert common == {
+        "seller", "invoice_number", "invoice_date", "client", "client_address", "consignee",
+        "currency", "total", "total_amount_words", "hs_code", "incoterm", "origin", "destination", "payment", "packaging",
+    }
+    assert {
+        "seller", "invoice_number", "invoice_date", "client", "client_address", "consignee", "currency", "total",
+        "total_amount_words", "hs_code", "incoterm", "origin", "destination", "packaging", "client_tax_id", "total_ht",
+        "number_of_bags", "bag_weight", "integration_rate", "bank_account", "payment_method", "payment_terms",
+    } == sotacib
+    forbidden = {"supplier_tax_id", "amount_ttc", "tva_amount", "tax_rate", "purchase_order_number", "total_ttc", "tax_amount"}
+    assert not (common & forbidden)
+    assert not (sotacib & forbidden)
+
+
+def test_producer_normal_ui_hides_candidate_choices_and_diagnostic_dynamic_values():
+    from pathlib import Path
+
+    app_js = Path("app/static/app.js").read_text(encoding="utf-8")
+    field_render = app_js.split("function renderFields(fields)", 1)[1].split("function producerVisibleReviewGroups", 1)[0]
+    suggestion_render = app_js.split("function renderCorrectionSuggestions(host)", 1)[1].split("function renderDuplicateAndFraud", 1)[0]
+    dynamic_render = app_js.split("function renderDynamicReview()", 1)[1].split("function renderFinancialChecks", 1)[0]
+    assert "isProducerPresentation(presentation)" in field_render
+    assert "renderProducerFieldStatus(field, input.value)" in field_render
+    assert "renderFieldCandidateFallback(field, input.value)" in field_render
+    assert 'if (isProducerPresentation(resolveDocumentPresentation()))' in suggestion_render
+    assert '"erp_fields", "all_extracted_fields", "line_items"' in dynamic_render
+    assert "review_candidates: reviewCandidates" in app_js
+    assert "rejected_candidates: rejectedCandidates" in app_js
+
+
+def test_producer_validation_ui_suppresses_legacy_tax_and_rejected_candidate_only_warnings():
+    from pathlib import Path
+
+    app_js = Path("app/static/app.js").read_text(encoding="utf-8")
+    assert "visibleProducerValidationMessages(validation.warnings || [])" in app_js
+    assert "insufficient totals for complete financial check" in app_js
+    assert "some extracted fields were withheld from erp export" in app_js
+    assert "suspicious tax rate" in app_js
+    assert "visibleProducerValidationMessages(explanation?.warnings" in app_js
+    assert "panel?.classList.add(\"hidden\")" in app_js
+    assert "irrelevantProducerFields" in app_js
+
+
+def test_producer_line_table_uses_simple_columns_actions_and_keeps_blank_rows_unvalidated():
+    from pathlib import Path
+
+    app_js = Path("app/static/app.js").read_text(encoding="utf-8")
+    assert 't("line_items.description")' in app_js and 't("line_items.quantity")' in app_js
+    assert 't("line_items.unit")' in app_js and 't("line_items.unit_price")' in app_js
+    assert 't("line_items.total_line")' in app_js and 't("common.actions")' in app_js
+    assert 'const status = !hasLineContent ? "needs_review"' in app_js
+    assert 'isProducerPresentation(resolveDocumentPresentation()) ? "total"' in app_js
+    assert "numberOrNull(producerInvoice ? (item.line_total ?? item.total)" in app_js
+    assert 'lastResponse.row_validation?.[index]?.status === "validated"' in app_js
+    producer_table = app_js.split("function renderLineItems(items", 1)[1].split("function editableLineItemRow", 1)[0]
+    assert "line_items.total_ttc" in producer_table  # Retained only for non-producer tables.
+    assert 'producerInvoice ? `<th>${escapeHtml(t("line_items.total_line"))}</th>`' in producer_table
+    assert 'producerInvoice ? "" : `' in producer_table
+
+
+def test_backend_accepts_canonical_producer_line_total_as_existing_total_field():
+    from app.services.correction_store import _review_line_items
+
+    rows = _review_line_items([{
+        "description": "CEMENT_TEST", "quantity": 2, "unit": "BAG", "unit_price": 50,
+        "total": 100, "source": "human verified",
+    }], [])
+    assert len(rows) == 1
+    assert rows[0].total == 100
+    assert rows[0].line_total_ht is None and rows[0].line_total_ttc is None
