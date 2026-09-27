@@ -58,9 +58,18 @@ const PRODUCER_COMMON_REVIEW_FIELDS = Object.freeze([
   "seller", "invoice_number", "invoice_date", "client", "client_address", "consignee",
   "currency", "total", "total_amount_words", "hs_code", "incoterm", "origin", "destination", "packaging",
 ]);
+const GENERAL_PRODUCER_REVIEW_FIELDS = Object.freeze([
+  "seller", "invoice_number", "invoice_date", "client", "client_address", "consignee", "currency", "total",
+  "total_amount_words", "hs_code", "incoterm", "origin", "destination", "payment", "packaging",
+]);
+const PRODUCER_OPTIONAL_EXTENSION_FIELDS = Object.freeze([
+  "client_rc", "consignee_address", "proforma_invoice_number", "proforma_invoice_date", "shipment", "bank", "iban", "swift",
+  "number_of_bags", "bag_weight", "truck_count",
+]);
+const PRODUCER_FIELD_REVIEW_CONFIDENCE_THRESHOLD = 0.65;
 const ENFIDHA_REVIEW_FIELDS = Object.freeze([
-  ...PRODUCER_COMMON_REVIEW_FIELDS, "client_rc", "consignee_address", "proforma_invoice_number",
-  "proforma_invoice_date", "shipment", "payment", "bank", "iban", "swift", "number_of_bags", "bag_weight", "truck_count",
+  ...PRODUCER_COMMON_REVIEW_FIELDS, "payment", "client_rc", "consignee_address", "proforma_invoice_number",
+  "proforma_invoice_date", "shipment", "bank", "iban", "swift", "number_of_bags", "bag_weight", "truck_count",
 ]);
 const SOTACIB_REVIEW_FIELDS = Object.freeze([
   ...PRODUCER_COMMON_REVIEW_FIELDS, "client_tax_id", "total_ht", "number_of_bags", "bag_weight",
@@ -69,7 +78,8 @@ const SOTACIB_REVIEW_FIELDS = Object.freeze([
 const PRODUCER_FIELD_GROUPS = Object.freeze({
   ciments_enfidha_invoice_v1: [
     ["invoice", ["seller", "invoice_number", "invoice_date", "proforma_invoice_number", "proforma_invoice_date"]],
-    ["client", ["client", "client_address", "client_rc", "consignee", "consignee_address"]],
+    ["client", ["client", "client_address", "client_rc"]],
+    ["consignee", ["consignee", "consignee_address"]],
     ["amounts", ["currency", "total", "total_amount_words"]],
     ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "truck_count"]],
     ["logistics", ["incoterm", "origin", "destination", "shipment"]],
@@ -77,21 +87,24 @@ const PRODUCER_FIELD_GROUPS = Object.freeze({
   ],
   sotacib_kairouan_grey_invoice_v1: [
     ["invoice", ["seller", "invoice_number", "invoice_date"]],
-    ["client", ["client", "client_address", "client_tax_id", "consignee"]],
+    ["client", ["client", "client_address", "client_tax_id"]],
+    ["consignee", ["consignee"]],
     ["amounts", ["currency", "total", "total_ht", "total_amount_words"]],
-    ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
+    ["product_logistics", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
     ["payment", ["bank_account", "payment_method", "payment_terms"]],
   ],
   sotacib_kasserine_white_invoice_v1: [
     ["invoice", ["seller", "invoice_number", "invoice_date"]],
-    ["client", ["client", "client_address", "client_tax_id", "consignee"]],
+    ["client", ["client", "client_address", "client_tax_id"]],
+    ["consignee", ["consignee"]],
     ["amounts", ["currency", "total", "total_ht", "total_amount_words"]],
-    ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
+    ["product_logistics", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
     ["payment", ["bank_account", "payment_method", "payment_terms"]],
   ],
   commercial_invoice: [
     ["invoice", ["seller", "invoice_number", "invoice_date"]],
-    ["client", ["client", "client_address", "consignee"]],
+    ["client", ["client", "client_address"]],
+    ["consignee", ["consignee"]],
     ["amounts", ["currency", "total", "total_amount_words"]],
     ["product", ["hs_code", "packaging"]],
     ["logistics", ["incoterm", "origin", "destination"]],
@@ -105,7 +118,7 @@ const DOCUMENT_PRESENTATION = Object.freeze({
   ciments_enfidha_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: ENFIDHA_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   sotacib_kairouan_grey_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   sotacib_kasserine_white_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
-  commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: PRODUCER_COMMON_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
+  commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: [...GENERAL_PRODUCER_REVIEW_FIELDS, ...PRODUCER_OPTIONAL_EXTENSION_FIELDS], showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   customs_declaration: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
   unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
 });
@@ -807,7 +820,9 @@ function renderFields(fields) {
     input.placeholder = "-";
     input.addEventListener("input", () => updateReviewField(field, input.value));
     value.appendChild(input);
-    value.appendChild(renderFieldCandidateFallback(field, input.value));
+    value.appendChild(isProducerPresentation(presentation)
+      ? renderProducerFieldStatus(field, input.value)
+      : renderFieldCandidateFallback(field, input.value));
     const numericValidation = lastResponse?.customs_field_validation?.[field];
     if (numericValidation) {
       const validationNote = document.createElement("small");
@@ -844,7 +859,27 @@ function renderFields(fields) {
 }
 
 function producerVisibleReviewGroups(presentation, fields) {
-  const groups = PRODUCER_FIELD_GROUPS[presentation.key];
+  let groups = PRODUCER_FIELD_GROUPS[presentation.key];
+  if (presentation.key === "commercial_invoice") {
+    const expanded = lastResponse?.expanded_fields || {};
+    const presentExtensions = PRODUCER_OPTIONAL_EXTENSION_FIELDS.filter((field) => {
+      const value = expanded[field]?.display_value ?? expanded[field]?.value ?? fields[field];
+      const confidence = expanded[field]?.confidence ?? lastResponse?.field_confidences?.[field];
+      return value !== null && value !== undefined && String(value).trim() !== ""
+        && Number.isFinite(Number(confidence)) && Number(confidence) >= PRODUCER_FIELD_REVIEW_CONFIDENCE_THRESHOLD;
+    });
+    const extensionSections = {
+      invoice: ["proforma_invoice_number", "proforma_invoice_date"],
+      client: ["client_rc"],
+      consignee: ["consignee_address"],
+      product: ["number_of_bags", "bag_weight", "truck_count"],
+      logistics: ["shipment"],
+      payment: ["bank", "iban", "swift"],
+    };
+    groups = PRODUCER_FIELD_GROUPS.commercial_invoice.map(([section, sectionFields]) => [section, [
+      ...sectionFields, ...presentExtensions.filter((field) => extensionSections[section]?.includes(field)),
+    ]]);
+  }
   if (!groups) return [[null, EDITABLE_FIELDS.filter((field) => presentation.fields.includes(field))]];
   const packaging = String(lastResponse?.expanded_fields?.packaging?.display_value
     ?? lastResponse?.expanded_fields?.packaging?.value ?? fields.packaging ?? "").toLowerCase();
@@ -854,6 +889,33 @@ function producerVisibleReviewGroups(presentation, fields) {
       && (/\b(bulk|vrac|en vrac)\b/.test(packaging) && ["number_of_bags", "bag_weight"].includes(field)
         || /\b(bag|bags|sac|sacs|sachet)\b/.test(packaging) && field === "truck_count")))
   ]).filter(([, sectionFields]) => sectionFields.length);
+}
+
+function isProducerPresentation(presentation = resolveDocumentPresentation()) {
+  return ["commercial_invoice", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(presentation?.key);
+}
+
+function renderProducerFieldStatus(field, value) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "candidate-fallback producer-field-status";
+  const corrected = correctedFields[field]?.corrected_by === "human" || correctedFields[field]?.user_action === "edited";
+  const present = value !== null && value !== undefined && String(value).trim() !== "";
+  const consistencyStatus = String(lastResponse?.field_consistency?.[field]?.status || "").toLowerCase();
+  const fieldReport = lastResponse?.validation_report?.fields?.[field];
+  const detail = lastResponse?.expanded_fields?.[field];
+  const confidence = detail?.confidence ?? lastResponse?.field_confidences?.[field];
+  const explicitReview = fieldReport?.accepted === false
+    || ["inconsistent", "conflict", "needs_review", "low_confidence"].includes(consistencyStatus)
+    || lastResponse?.customs_field_validation?.[field]?.valid === false
+    || Boolean(detail?.rejection_reason)
+    || (confidence !== null && confidence !== undefined && Number.isFinite(Number(confidence))
+      && Number(confidence) < PRODUCER_FIELD_REVIEW_CONFIDENCE_THRESHOLD);
+  const statusKey = corrected ? "status.manually_corrected"
+    : !present ? "status.not_extracted"
+      : explicitReview ? "status.needs_review" : "status.confirmed";
+  const statusClass = corrected ? "manually_corrected" : !present || explicitReview ? "needs_review" : "validated";
+  wrapper.innerHTML = `<span class="candidate-state ${statusClass}">${escapeHtml(t(statusKey))}</span>`;
+  return wrapper;
 }
 
 function renderAvailableStructuredValues(fields = {}, expandedFields = {}, allowedFields = null) {
@@ -930,18 +992,21 @@ function renderNotes(data) {
   const validation = data.validation || {};
   const explanation = data.validation_explanation;
   const notes = document.getElementById("validationNotes");
+  const errors = visibleProducerValidationMessages(validation.errors || []);
+  const warnings = visibleProducerValidationMessages(validation.warnings || []);
   const items = [
-    ...(validation.errors || []).map((message) => ({ type: t("common.error"), message, className: "error-note" })),
-    ...(validation.warnings || []).map((message) => ({ type: t("common.warning"), message, className: "warning-note" })),
+    ...errors.map((message) => ({ type: t("common.error"), message, className: "error-note" })),
+    ...warnings.map((message) => ({ type: t("common.warning"), message, className: "warning-note" })),
   ];
   notes.innerHTML = "";
-  if (explanation?.reason) {
+  const explanationReason = visibleProducerValidationMessages(explanation?.reason ? [explanation.reason] : [])[0];
+  if (explanationReason) {
     const reason = document.createElement("div");
     reason.className = `note ${explanation.status === "valid" ? "success-note" : "warning-note"}`;
-    reason.textContent = explanation.reason;
+    reason.textContent = explanationReason;
     notes.appendChild(reason);
   }
-  if (!items.length && !explanation?.reason) {
+  if (!items.length && !explanationReason) {
     notes.innerHTML = `<div class="note success-note">${escapeHtml(t("validation.no_issues"))}</div>`;
     return;
   }
@@ -955,8 +1020,10 @@ function renderNotes(data) {
 
 function renderValidationSummary(explanation, validation) {
   const status = explanation?.status || validation?.status || "-";
-  const reason = explanation?.reason || t("validation.no_summary");
-  const action = explanation?.suggested_action || t("validation.default_action");
+  const errors = visibleProducerValidationMessages(explanation?.blocking_errors || validation?.errors || []);
+  const warnings = visibleProducerValidationMessages(explanation?.warnings || validation?.warnings || []);
+  const reason = visibleProducerValidationMessages(explanation?.reason ? [explanation.reason] : [])[0] || t("validation.no_summary");
+  const action = visibleProducerValidationMessages(explanation?.suggested_action ? [explanation.suggested_action] : [])[0] || t("validation.default_action");
   const statusText = statusExplanation(status);
   validationSummary.innerHTML = `
     <span class="label">${escapeHtml(t("validation.explanation"))}</span>
@@ -965,8 +1032,8 @@ function renderValidationSummary(explanation, validation) {
     <div class="inspector-list">
       <div class="inspector-row"><span>${escapeHtml(t("common.reason"))}</span><div>${escapeHtml(reason)}</div></div>
       <div class="inspector-row"><span>${escapeHtml(t("common.action"))}</span><div>${escapeHtml(action)}</div></div>
-      <div class="inspector-row"><span>${escapeHtml(t("validation.errors"))}</span><div>${escapeHtml(String(explanation?.blocking_errors?.length ?? validation?.errors?.length ?? 0))}</div></div>
-      <div class="inspector-row"><span>${escapeHtml(t("validation.warnings"))}</span><div>${escapeHtml(String(explanation?.warnings?.length ?? validation?.warnings?.length ?? 0))}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("validation.errors"))}</span><div>${escapeHtml(String(errors.length))}</div></div>
+      <div class="inspector-row"><span>${escapeHtml(t("validation.warnings"))}</span><div>${escapeHtml(String(warnings.length))}</div></div>
     </div>
   `;
 }
@@ -1012,8 +1079,11 @@ function renderErpReadiness(data) {
   const readiness = data.erp_readiness || data.erp_json?.quality?.erp_readiness || {};
   const status = localizedReadinessStatus(readiness.erp_ready_status, data.validation?.status);
   const score = Number(readiness.erp_ready_score ?? 0);
-  const blockers = readiness.blocking_errors || [];
-  const missing = readiness.missing_fields || [];
+  const blockers = visibleProducerValidationMessages(readiness.blocking_errors || []);
+  const irrelevantProducerFields = new Set(["supplier_address", "supplier_tax_id", "amount_ht", "amount_ttc", "tva_amount", "tax_rate", "purchase_order_number"]);
+  const missing = isProducerPresentation(presentation)
+    ? (readiness.missing_fields || []).filter((field) => !irrelevantProducerFields.has(field))
+    : (readiness.missing_fields || []);
   const disabledReasons = [...blockers, ...missing.map((field) => t("erp.field_missing", { field: t(`fields.${field}`) }))];
   const validationCode = String(data.validation?.status || "").toLowerCase();
   const className = readiness.ready ? "ready" : validationCode.includes("reject") || validationCode.includes("invalid") ? "rejected" : "review";
@@ -1043,6 +1113,13 @@ function renderErpReadiness(data) {
 
 function renderConfidences(confidences) {
   const list = document.getElementById("confidenceList");
+  const panel = list.closest("section.panel");
+  if (isProducerPresentation(resolveDocumentPresentation())) {
+    list.innerHTML = "";
+    panel?.classList.add("hidden");
+    return;
+  }
+  panel?.classList.remove("hidden");
   list.innerHTML = "";
   const entries = Object.entries(confidences);
   if (!entries.length) {
@@ -1086,17 +1163,18 @@ function renderLineItems(items, rowValidation = []) {
         <tr>
           <th>${escapeHtml(t("line_items.description"))}</th><th>${escapeHtml(t("line_items.quantity"))}</th><th>${escapeHtml(t("line_items.unit"))}</th><th>${escapeHtml(t("line_items.unit_price"))}</th>
           ${producerInvoice ? `<th>${escapeHtml(t("line_items.total_line"))}</th>` : ""}
+          ${producerInvoice ? `<th>${escapeHtml(t("common.actions"))}</th>` : ""}
           ${producerInvoice ? "" : `
           <th>${escapeHtml(t("line_items.total_ht"))}</th><th>${escapeHtml(t("line_items.tax"))}</th><th>${escapeHtml(t("line_items.total_ttc"))}</th><th>${escapeHtml(t("common.status"))}</th><th>${escapeHtml(t("common.actions"))}</th>
           `}
         </tr>
       </thead>
-      <tbody>${rows || `<tr><td colspan="${producerInvoice ? 7 : 9}"><div class="note">${escapeHtml(t("line_items.none"))}</div></td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="${producerInvoice ? 6 : 9}"><div class="note">${escapeHtml(t("line_items.none"))}</div></td></tr>`}</tbody>
       <tfoot>
         <tr class="line-items-total-footer" aria-live="polite">
-          <td colspan="${producerInvoice ? 4 : 6}" class="line-items-total-label">${escapeHtml(t("line_items.lines_total"))}</td>
+          <td colspan="${producerInvoice ? 5 : 6}" class="line-items-total-label">${escapeHtml(t("line_items.lines_total"))}</td>
           <td id="lineItemsTotalSummary" class="line-items-total-cell">0.00</td>
-          ${producerInvoice ? "" : `<td colspan="2" class="line-items-total-meta">${escapeHtml(t("line_items.total_ttc"))}</td>`}
+          ${producerInvoice ? `<td></td>` : `<td colspan="2" class="line-items-total-meta">${escapeHtml(t("line_items.total_ttc"))}</td>`}
         </tr>
       </tfoot>
     </table>
@@ -1116,13 +1194,15 @@ function renderLineItems(items, rowValidation = []) {
 }
 
 function editableLineItemRow(item, index, validationReport, producerInvoice = false) {
-  const status = validationReport?.status || (String(item.source || "").toLowerCase().includes("review") ? "needs_review" : "validated");
+  const hasLineContent = [item.description, item.quantity, item.unit, item.unit_price, item.line_total, item.total, item.line_total_ttc, item.line_total_ht]
+    .some((value) => value !== null && value !== undefined && String(value).trim() !== "");
+  const status = !hasLineContent ? "needs_review" : validationReport?.status || (String(item.source || "").toLowerCase().includes("review") ? "needs_review" : "validated");
   const cells = [
     ["description", item.description, "description-input"],
     ["quantity", item.quantity, ""],
     ["unit", item.unit, ""],
     ["unit_price", item.unit_price, ""],
-    ...(producerInvoice ? [["line_total", item.line_total_ttc ?? item.line_total_ht ?? item.total, ""]] : [
+    ...(producerInvoice ? [["line_total", item.line_total ?? item.total, ""]] : [
     ["line_total_ht", item.line_total_ht, ""],
     ["tax_rate", item.tax_rate, ""],
     ["line_total_ttc", item.line_total_ttc ?? item.total, ""],
@@ -1131,14 +1211,32 @@ function editableLineItemRow(item, index, validationReport, producerInvoice = fa
     <td><input class="edit-input ${className}" data-index="${index}" data-line-field="${field}" value="${escapeAttribute(value ?? "")}" placeholder="-"></td>
   `).join("");
   const reason = validationReport?.validation_reason || item.source || "";
-  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}${producerInvoice ? "" : `<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(statusLabel(status))}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-delete-line data-index="${index}">${escapeHtml(t("common.delete"))}</button></div></td>`}</tr>`;
+  const actions = `<td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-delete-line data-index="${index}">${escapeHtml(t("common.delete"))}</button></div></td>`;
+  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}${producerInvoice ? actions : `<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(statusLabel(status))}</span></td>${actions}`}</tr>`;
+}
+
+function visibleProducerValidationMessages(messages) {
+  const values = Array.isArray(messages) ? messages : [];
+  if (!isProducerPresentation(resolveDocumentPresentation())) return values;
+  return values.filter((message) => {
+    const normalized = String(message || "").toLowerCase();
+    return !normalized.includes("insufficient semantically valid totals for complete financial consistency check")
+      && !normalized.includes("insufficient totals for complete financial check")
+      && !normalized.includes("some extracted fields were withheld from erp export")
+      && !/(suspicious tax rate|tax rate is missing|tax amount|vat amount|tva|\bvat\b|\bttc\b|amount_ttc|line ttc totals sum)/i.test(normalized)
+      && (resolveDocumentPresentation().key === "sotacib_kairouan_grey_invoice_v1"
+        || resolveDocumentPresentation().key === "sotacib_kasserine_white_invoice_v1"
+        || !/(amount_ht|total ht|line_total_ht)/i.test(normalized));
+  });
 }
 function updateLineItemsTotalSummary() {
   const host = document.getElementById("lineItemsTotalSummary");
   if (!host || !lastResponse) return;
   const items = lastResponse.detected_fields?.line_items || [];
+  const producerInvoice = isProducerPresentation(resolveDocumentPresentation());
   const values = items
-    .map((item) => numberOrNull(item.line_total_ttc ?? item.total))
+    .filter((item, index) => !producerInvoice || lastResponse.row_validation?.[index]?.status === "validated")
+    .map((item) => numberOrNull(producerInvoice ? (item.line_total ?? item.total) : (item.line_total_ttc ?? item.total)))
     .filter((value) => value !== null);
   const lineTotal = roundMoney(values.reduce((sum, value) => sum + value, 0));
   host.textContent = formatMoney(lineTotal);
@@ -1262,11 +1360,12 @@ function updateReviewLineItem(index, field, rawValue) {
   items[index] = items[index] || {};
   const value = coerceValue(field, rawValue);
   const storageField = field === "line_total"
-    ? (items[index].line_total_ttc !== null && items[index].line_total_ttc !== undefined ? "line_total_ttc"
-      : items[index].line_total_ht !== null && items[index].line_total_ht !== undefined ? "line_total_ht" : "total")
+    ? (isProducerPresentation(resolveDocumentPresentation()) ? "total"
+      : items[index].line_total_ttc !== null && items[index].line_total_ttc !== undefined ? "line_total_ttc"
+        : items[index].line_total_ht !== null && items[index].line_total_ht !== undefined ? "line_total_ht" : "total")
     : field;
   items[index][storageField] = value;
-  if (storageField === "line_total_ttc") items[index].total = value;
+  if (storageField === "line_total_ttc" || (field === "line_total" && storageField === "total")) items[index].total = value;
   items[index].source = "human verified";
   items[index].confidence = 1;
   syncLineItemsToResponse();
@@ -1415,6 +1514,11 @@ function renderDynamicReview() {
     host.innerHTML = `<div class="note">${escapeHtml(t("dynamic.visual_help"))}</div>`;
     return;
   }
+  if (isProducerPresentation(resolveDocumentPresentation())
+      && ["erp_fields", "all_extracted_fields", "line_items"].includes(activeDynamicTab)) {
+    host.innerHTML = `<div class="note">${escapeHtml(t("producer.review_in_main_panel"))}</div>`;
+    return;
+  }
   if (activeDynamicTab === "raw_json") {
     host.innerHTML = `<pre>${escapeHtml(pretty(lastResponse))}</pre>`;
     return;
@@ -1454,9 +1558,18 @@ function renderDynamicReview() {
 
 function renderFinancialChecks(host) {
   const reasoning = lastResponse.financial_reasoning || {};
-  const checks = Object.entries(reasoning.checks || {});
-  const warnings = reasoning.financial_warnings || [];
-  const errors = reasoning.financial_errors || [];
+  const producerReview = isProducerPresentation(resolveDocumentPresentation());
+  const family = resolveDocumentPresentation().key;
+  const checks = Object.entries(reasoning.checks || {}).filter(([name]) => {
+    if (!producerReview) return true;
+    const normalized = name.toLowerCase();
+    if (/tva|vat|tax.rate|tax.amount|ttc|amount_ttc|line_total_ttc/.test(normalized)) return false;
+    if (family !== "sotacib_kairouan_grey_invoice_v1" && family !== "sotacib_kasserine_white_invoice_v1"
+        && /(amount_ht|line_total_ht|subtotal_ht)/.test(normalized)) return false;
+    return true;
+  });
+  const warnings = visibleProducerValidationMessages(reasoning.financial_warnings || []);
+  const errors = visibleProducerValidationMessages(reasoning.financial_errors || []);
   const rows = checks.map(([name, check]) => {
     const hasActual = check.actual !== null && check.actual !== undefined && check.actual !== "";
     const status = check.passed ? "pass" : hasActual ? "fail" : "warn";
@@ -1489,6 +1602,10 @@ function renderFinancialChecks(host) {
 }
 
 function renderCorrectionSuggestions(host) {
+  if (isProducerPresentation(resolveDocumentPresentation())) {
+    host.innerHTML = `<div class="note">${escapeHtml(t("suggestion.none"))}</div>`;
+    return;
+  }
   const assistant = lastResponse.review_assistant || {};
   const assistantIssues = assistant.issues || [];
   const suggestions = lastResponse.correction_suggestions || [];

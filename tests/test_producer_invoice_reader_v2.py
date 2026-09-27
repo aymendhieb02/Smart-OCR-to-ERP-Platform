@@ -328,7 +328,8 @@ def test_page_one_frontend_uses_canonical_common_fields_for_general_invoices():
     from pathlib import Path
 
     app_js = Path("app/static/app.js").read_text(encoding="utf-8")
-    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: PRODUCER_COMMON_REVIEW_FIELDS' in app_js
+    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: [...GENERAL_PRODUCER_REVIEW_FIELDS, ...PRODUCER_OPTIONAL_EXTENSION_FIELDS]' in app_js
+    assert "const presentExtensions = PRODUCER_OPTIONAL_EXTENSION_FIELDS.filter" in app_js
     assert 'commercial_invoice: [' in app_js
     for field in PRODUCER_COMMON_FIELDS:
         assert f'"{field}"' in app_js

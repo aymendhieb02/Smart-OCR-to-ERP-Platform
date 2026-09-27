@@ -62,7 +62,7 @@ def test_customs_review_configuration_is_exact_and_every_key_is_editable():
 def test_producer_review_configuration_is_unchanged_and_ruspina_is_family_specific():
     script = Path("app/static/app.js").read_text(encoding="utf-8")
     assert 'ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: RUSPINA_REVIEW_FIELDS' in script
-    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: PRODUCER_COMMON_REVIEW_FIELDS' in script
+    assert 'commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: [...GENERAL_PRODUCER_REVIEW_FIELDS, ...PRODUCER_OPTIONAL_EXTENSION_FIELDS]' in script
 
 
 @pytest.mark.parametrize("field", CUSTOMS_FIELDS)
