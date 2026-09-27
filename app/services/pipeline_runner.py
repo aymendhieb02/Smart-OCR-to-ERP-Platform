@@ -18,10 +18,11 @@ from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.ruspina_field_extractor import extract_ruspina_fields
+from app.services.producer_invoice_review import PRODUCER_REVIEW_FIELDS, apply_producer_review_fields
 from app.services.dossier_reconciler import reconcile_dossier
 from app.core.canonical_parties import canonicalize_party
 from app.services.correction_identity import correction_document_id
-from app.services.correction_store import load_review_field_corrections, normalize_ruspina_review_value
+from app.services.correction_store import load_review_field_corrections, load_review_line_item_corrections, normalize_ruspina_review_value
 from app.services.file_loader import LoadedDocument, load_document
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.layout_analyzer import LayoutAnalyzer
@@ -188,11 +189,14 @@ def process_dossier_file(
                     and any("customs_structure" in item.matched_anchors for item in group.page_classifications)
                 ),
             )
-            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1"}:
+            apply_producer_review_fields(response, group.document_family, logical_ocr.lines)
+            if group.document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1", *PRODUCER_REVIEW_FIELDS}:
                 if path.is_file():
                     stable_document_id = correction_document_id(path, group.group_id)
                     persisted = load_review_field_corrections(stable_document_id, group.document_family)
                     _apply_family_review_corrections(response, persisted, group.document_family)
+                    line_item_corrections = load_review_line_item_corrections(stable_document_id, group.document_family)
+                    _apply_producer_line_item_corrections(response, line_item_corrections)
             processed.append(ProcessedLogicalDocument(group=group, response=response))
 
     return DossierProcessResult(
@@ -244,6 +248,25 @@ def _apply_family_review_corrections(
 def _apply_tradenet_corrections(response: ProcessInvoiceResponse, corrections: dict[str, dict]) -> None:
     """Backward-compatible alias retained for existing TradeNet callers/tests."""
     _apply_family_review_corrections(response, corrections)
+
+
+def _apply_producer_line_item_corrections(response: ProcessInvoiceResponse, corrections: dict[int, dict]) -> None:
+    """Apply saved per-cell edits while retaining OCR row geometry/evidence metadata."""
+    if not corrections:
+        return
+    for rows in (
+        response.detected_fields.line_items,
+        response.all_line_items,
+        response.line_items_validated,
+        response.line_items_needs_review,
+    ):
+        for index, values in corrections.items():
+            if index >= len(rows):
+                continue
+            row = rows[index]
+            for field_name, record in values.items():
+                if hasattr(row, field_name):
+                    setattr(row, field_name, record.get("corrected_value"))
 
 
 def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -> str | None:

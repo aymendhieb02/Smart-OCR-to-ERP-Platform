@@ -806,9 +806,19 @@ button:disabled {
   border-bottom: 1px solid var(--line);
 }
 
-.field-table div:nth-child(odd) {
+.field-table div.field-name-label {
   color: var(--muted);
   font-weight: 700;
+}
+
+.field-table div.field-section-heading {
+  grid-column: 1 / -1;
+  padding: 12px 10px 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
 }
 
 .notes {

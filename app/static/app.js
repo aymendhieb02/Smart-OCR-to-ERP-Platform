@@ -54,10 +54,49 @@ const CUSTOMS_TRADENET_REVIEW_FIELDS = Object.freeze([
   "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
   "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
 ]);
+const PRODUCER_COMMON_REVIEW_FIELDS = Object.freeze([
+  "seller", "invoice_number", "invoice_date", "client", "client_address", "consignee",
+  "currency", "total", "total_amount_words", "hs_code", "incoterm", "origin", "destination", "packaging",
+]);
+const ENFIDHA_REVIEW_FIELDS = Object.freeze([
+  ...PRODUCER_COMMON_REVIEW_FIELDS, "client_rc", "consignee_address", "proforma_invoice_number",
+  "proforma_invoice_date", "shipment", "payment", "bank", "iban", "swift", "number_of_bags", "bag_weight", "truck_count",
+]);
+const SOTACIB_REVIEW_FIELDS = Object.freeze([
+  ...PRODUCER_COMMON_REVIEW_FIELDS, "client_tax_id", "total_ht", "number_of_bags", "bag_weight",
+  "integration_rate", "bank_account", "payment_method", "payment_terms",
+]);
+const PRODUCER_FIELD_GROUPS = Object.freeze({
+  ciments_enfidha_invoice_v1: [
+    ["invoice", ["seller", "invoice_number", "invoice_date", "proforma_invoice_number", "proforma_invoice_date"]],
+    ["client", ["client", "client_address", "client_rc", "consignee", "consignee_address"]],
+    ["amounts", ["currency", "total", "total_amount_words"]],
+    ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "truck_count"]],
+    ["logistics", ["incoterm", "origin", "destination", "shipment"]],
+    ["payment", ["payment", "bank", "iban", "swift"]],
+  ],
+  sotacib_kairouan_grey_invoice_v1: [
+    ["invoice", ["seller", "invoice_number", "invoice_date"]],
+    ["client", ["client", "client_address", "client_tax_id", "consignee"]],
+    ["amounts", ["currency", "total", "total_ht", "total_amount_words"]],
+    ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
+    ["payment", ["bank_account", "payment_method", "payment_terms"]],
+  ],
+  sotacib_kasserine_white_invoice_v1: [
+    ["invoice", ["seller", "invoice_number", "invoice_date"]],
+    ["client", ["client", "client_address", "client_tax_id", "consignee"]],
+    ["amounts", ["currency", "total", "total_ht", "total_amount_words"]],
+    ["product", ["hs_code", "packaging", "number_of_bags", "bag_weight", "integration_rate", "incoterm", "origin", "destination"]],
+    ["payment", ["bank_account", "payment_method", "payment_terms"]],
+  ],
+});
 const DOCUMENT_PRESENTATION = Object.freeze({
   customs_tradenet_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
   customs_douanes_tunisiennes_v1: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: true, allowInvoiceExport: false, relationCapabilities: [] },
   ruspina_reinvoice_v1: { labelKey: "dossier.document_ruspina", fields: RUSPINA_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: ["referenced_invoice"] },
+  ciments_enfidha_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: ENFIDHA_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
+  sotacib_kairouan_grey_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
+  sotacib_kasserine_white_invoice_v1: { labelKey: "dossier.document_supplier_invoice", fields: SOTACIB_REVIEW_FIELDS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   commercial_invoice: { labelKey: "dossier.document_supplier_invoice", fields: INVOICE_FIELD_GROUPS, showLineItems: true, allowCorrections: true, allowInvoiceExport: true, relationCapabilities: [] },
   customs_declaration: { labelKey: "dossier.document_customs", fields: CUSTOMS_TRADENET_REVIEW_FIELDS, showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: ["referenced_invoice", "invoice_value"] },
   unknown: { labelKey: "dossier.document_unknown", fields: [], showLineItems: false, allowCorrections: false, allowInvoiceExport: false, relationCapabilities: [] },
@@ -101,6 +140,10 @@ const EDITABLE_FIELDS = [
   "amount_ttc",
   "tax_rate",
   "purchase_order_number",
+  ...PRODUCER_COMMON_REVIEW_FIELDS,
+  "client_rc", "consignee_address", "proforma_invoice_number", "proforma_invoice_date", "shipment",
+  "payment", "bank", "iban", "swift", "truck_count", "total_ht", "client_tax_id", "integration_rate",
+  "bank_account", "payment_method", "payment_terms", "hs_code",
   "declaration_number",
   "declaration_date",
   "declaration_type",
@@ -111,7 +154,7 @@ const EDITABLE_FIELDS = [
   "customs_total_value_tnd",
 ];
 
-const NUMERIC_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate", "quantity", "unit_price", "discount", "line_total_ht", "tax_amount", "line_total_ttc", "total"]);
+const NUMERIC_FIELDS = new Set(["amount_ht", "tva_amount", "amount_ttc", "tax_rate", "quantity", "unit_price", "discount", "line_total", "line_total_ht", "tax_amount", "line_total_ttc", "total"]);
 const FIELD_TO_ERP_PATH = {
   supplier_name: ["supplier", "name"],
   supplier_address: ["supplier", "address"],
@@ -735,8 +778,16 @@ function renderFields(fields) {
     table.innerHTML = `<div class="note warning-note">${escapeHtml(t("dossier.correction_unavailable"))}</div>${renderAvailableStructuredValues(fields, lastResponse?.expanded_fields, allowedFields)}`;
     return;
   }
-  EDITABLE_FIELDS.filter((field) => presentation.fields.includes(field)).forEach((field) => {
+  producerVisibleReviewGroups(presentation, fields).forEach(([section, sectionFields]) => {
+    if (section) {
+      const heading = document.createElement("div");
+      heading.className = "field-section-heading";
+      heading.textContent = t(`producer.section.${section}`);
+      table.appendChild(heading);
+    }
+    sectionFields.forEach((field) => {
     const key = document.createElement("div");
+    key.className = "field-name-label";
     key.textContent = t(`fields.${field}`);
     const value = document.createElement("div");
     value.className = "field-review-cell";
@@ -756,7 +807,7 @@ function renderFields(fields) {
       validationNote.textContent = t(numericValidation.valid ? "fields.decimal_valid" : "fields.decimal_invalid");
       value.appendChild(validationNote);
     }
-    if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1"].includes(presentation.key) && detail) {
+    if (["customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(presentation.key) && detail) {
       const evidence = document.createElement("details");
       evidence.className = "field-source-evidence";
       const summary = document.createElement("summary");
@@ -780,7 +831,21 @@ function renderFields(fields) {
       value.appendChild(evidence);
     }
     table.append(key, value);
+    });
   });
+}
+
+function producerVisibleReviewGroups(presentation, fields) {
+  const groups = PRODUCER_FIELD_GROUPS[presentation.key];
+  if (!groups) return [[null, EDITABLE_FIELDS.filter((field) => presentation.fields.includes(field))]];
+  const packaging = String(lastResponse?.expanded_fields?.packaging?.display_value
+    ?? lastResponse?.expanded_fields?.packaging?.value ?? fields.packaging ?? "").toLowerCase();
+  return groups.map(([section, sectionFields]) => [section, sectionFields
+    .filter((field) => EDITABLE_FIELDS.includes(field) && presentation.fields.includes(field))
+    .filter((field) => !(presentation.key === "ciments_enfidha_invoice_v1"
+      && (/\b(bulk|vrac|en vrac)\b/.test(packaging) && ["number_of_bags", "bag_weight"].includes(field)
+        || /\b(bag|bags|sac|sacs|sachet)\b/.test(packaging) && field === "truck_count")))
+  ]).filter(([, sectionFields]) => sectionFields.length);
 }
 
 function renderAvailableStructuredValues(fields = {}, expandedFields = {}, allowedFields = null) {
@@ -994,11 +1059,12 @@ function renderLineItems(items, rowValidation = []) {
     return;
   }
   const editableItems = items || [];
+  const producerInvoice = ["ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(presentation.key);
   if (lastResponse) {
     lastResponse.detected_fields = lastResponse.detected_fields || {};
     lastResponse.detected_fields.line_items = editableItems;
   }
-  const rows = editableItems.map((item, index) => editableLineItemRow(item, index, rowValidation[index])).join("");
+  const rows = editableItems.map((item, index) => editableLineItemRow(item, index, rowValidation[index], producerInvoice)).join("");
   box.innerHTML = `
     <div class="panel-head">
       <p class="panel-subtitle">${escapeHtml(t("line_items.help"))}</p>
@@ -1011,15 +1077,18 @@ function renderLineItems(items, rowValidation = []) {
       <thead>
         <tr>
           <th>${escapeHtml(t("line_items.description"))}</th><th>${escapeHtml(t("line_items.quantity"))}</th><th>${escapeHtml(t("line_items.unit"))}</th><th>${escapeHtml(t("line_items.unit_price"))}</th>
+          ${producerInvoice ? `<th>${escapeHtml(t("line_items.total_line"))}</th>` : ""}
+          ${producerInvoice ? "" : `
           <th>${escapeHtml(t("line_items.total_ht"))}</th><th>${escapeHtml(t("line_items.tax"))}</th><th>${escapeHtml(t("line_items.total_ttc"))}</th><th>${escapeHtml(t("common.status"))}</th><th>${escapeHtml(t("common.actions"))}</th>
+          `}
         </tr>
       </thead>
-      <tbody>${rows || `<tr><td colspan="9"><div class="note">${escapeHtml(t("line_items.none"))}</div></td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="${producerInvoice ? 7 : 9}"><div class="note">${escapeHtml(t("line_items.none"))}</div></td></tr>`}</tbody>
       <tfoot>
         <tr class="line-items-total-footer" aria-live="polite">
-          <td colspan="6" class="line-items-total-label">${escapeHtml(t("line_items.lines_total"))}</td>
+          <td colspan="${producerInvoice ? 4 : 6}" class="line-items-total-label">${escapeHtml(t("line_items.lines_total"))}</td>
           <td id="lineItemsTotalSummary" class="line-items-total-cell">0.00</td>
-          <td colspan="2" class="line-items-total-meta">${escapeHtml(t("line_items.total_ttc"))}</td>
+          ${producerInvoice ? "" : `<td colspan="2" class="line-items-total-meta">${escapeHtml(t("line_items.total_ttc"))}</td>`}
         </tr>
       </tfoot>
     </table>
@@ -1038,21 +1107,23 @@ function renderLineItems(items, rowValidation = []) {
   updateLineItemsTotalSummary();
 }
 
-function editableLineItemRow(item, index, validationReport) {
+function editableLineItemRow(item, index, validationReport, producerInvoice = false) {
   const status = validationReport?.status || (String(item.source || "").toLowerCase().includes("review") ? "needs_review" : "validated");
   const cells = [
     ["description", item.description, "description-input"],
     ["quantity", item.quantity, ""],
     ["unit", item.unit, ""],
     ["unit_price", item.unit_price, ""],
+    ...(producerInvoice ? [["line_total", item.line_total_ttc ?? item.line_total_ht ?? item.total, ""]] : [
     ["line_total_ht", item.line_total_ht, ""],
     ["tax_rate", item.tax_rate, ""],
     ["line_total_ttc", item.line_total_ttc ?? item.total, ""],
+    ]),
   ].map(([field, value, className]) => `
     <td><input class="edit-input ${className}" data-index="${index}" data-line-field="${field}" value="${escapeAttribute(value ?? "")}" placeholder="-"></td>
   `).join("");
   const reason = validationReport?.validation_reason || item.source || "";
-  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(statusLabel(status))}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-delete-line data-index="${index}">${escapeHtml(t("common.delete"))}</button></div></td></tr>`;
+  return `<tr class="${escapeAttribute(status)}" data-line-row="${index + 1}">${cells}${producerInvoice ? "" : `<td><span class="status-chip ${escapeAttribute(status)}" title="${escapeAttribute(reason || statusExplanation(status))}">${escapeHtml(statusLabel(status))}</span></td><td><div class="dynamic-actions"><button class="ghost small" type="button" data-restore-line data-index="${index}">${escapeHtml(t("common.restore"))}</button><button class="ghost small" type="button" data-delete-line data-index="${index}">${escapeHtml(t("common.delete"))}</button></div></td>`}</tr>`;
 }
 function updateLineItemsTotalSummary() {
   const host = document.getElementById("lineItemsTotalSummary");
@@ -1182,8 +1253,12 @@ function updateReviewLineItem(index, field, rawValue) {
   const items = ensureLineItems();
   items[index] = items[index] || {};
   const value = coerceValue(field, rawValue);
-  items[index][field] = value;
-  if (field === "line_total_ttc") items[index].total = value;
+  const storageField = field === "line_total"
+    ? (items[index].line_total_ttc !== null && items[index].line_total_ttc !== undefined ? "line_total_ttc"
+      : items[index].line_total_ht !== null && items[index].line_total_ht !== undefined ? "line_total_ht" : "total")
+    : field;
+  items[index][storageField] = value;
+  if (storageField === "line_total_ttc") items[index].total = value;
   items[index].source = "human verified";
   items[index].confidence = 1;
   syncLineItemsToResponse();
@@ -2041,7 +2116,7 @@ function buildReviewCorrectionPayload() {
     field_corrections: buildCorrectedFieldPayload(),
     line_item_corrections: lastResponse.detected_fields?.line_items || [],
     ignored_rows: stableIgnoredRows(),
-    original_payload: lastResponse,
+    original_payload: { ...lastResponse, original_line_items: originalLineItemsSnapshot },
   };
 }
 
@@ -2061,7 +2136,7 @@ function refreshValidationHeader() {
 }
 
 function applyCorrectionValidationResponse(data, { rerenderEditableRows = true } = {}) {
-  if (resolveDocumentPresentation().key === "ruspina_reinvoice_v1") {
+  if (["ruspina_reinvoice_v1", "ciments_enfidha_invoice_v1", "sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"].includes(resolveDocumentPresentation().key)) {
     lastResponse.expanded_fields = lastResponse.expanded_fields || {};
     Object.entries(data.expanded_field_overrides || {}).forEach(([name, detail]) => {
       lastResponse.expanded_fields[name] = detail;
