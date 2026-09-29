@@ -631,7 +631,7 @@ def _tesseract_string_lines(pytesseract, image: np.ndarray, page_number: int, co
 
 def _dedupe_ocr_lines(lines: list[OCRLine]) -> list[OCRLine]:
     unique: list[OCRLine] = []
-    seen: set[tuple[int, str]] = set()
+    positions: dict[tuple[int, str], int] = {}
     for line in lines:
         normalized = normalize_text(line.text).lower()
         if not normalized:
@@ -639,10 +639,18 @@ def _dedupe_ocr_lines(lines: list[OCRLine]) -> list[OCRLine]:
         # Keep repeated labels/values on different physical pages. A dossier
         # must retain the same per-page OCR evidence as a standalone upload.
         key = (line.page_number, normalized)
-        if key in seen:
+        existing_index = positions.get(key)
+        if existing_index is None:
+            positions[key] = len(unique)
+            unique.append(line)
             continue
-        seen.add(key)
-        unique.append(line)
+        # PDFs may contain a text layer as well as scanned-page OCR. The text
+        # layer is added first and has no geometry; prefer the duplicate
+        # positioned OCR line so downstream layout and table extraction can
+        # associate the same text with its page location.
+        existing = unique[existing_index]
+        if existing.bbox is None and line.bbox is not None:
+            unique[existing_index] = line
     return unique
 
 
