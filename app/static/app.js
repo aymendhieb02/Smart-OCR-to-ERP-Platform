@@ -150,6 +150,7 @@ const EDITABLE_FIELDS = [
   "gross_weight",
   "net_weight",
   "number_of_bags",
+  "bag_weight",
   "delivery",
   "origin",
   "payment",
