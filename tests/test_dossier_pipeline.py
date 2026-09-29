@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from app.core.schemas import BoundingBox, OCRLine, OCRResult
+from app.core.schemas import BoundingBox, DocumentClassification, FieldExtractionDetail, OCRLine, OCRResult
 from app.services.file_loader import LoadedDocument
 from app.services.pipeline_runner import process_dossier_file
 
@@ -54,7 +54,6 @@ def test_dossier_ocr_runs_once_and_existing_pipeline_receives_page_scoped_eviden
     assert engine.run_calls == 1
     assert [item.group.pages for item in result.logical_documents] == [(1,), (2,), (3,)]
     assert engine.fallback_calls == [
-        (1, ("header_parties",), (3,)),
         (1, ("tradenet_declaration_header", "tradenet_parties", "tradenet_financial"), (3,)),
         (1, ("tradenet_customs_total",), (3,)),
     ]
@@ -97,7 +96,6 @@ def test_tradenet_family_propagates_but_invoice_families_do_not_trigger_header_f
     assert custom_document.group.document_family == "customs_tradenet_v1"
     assert captured["document_family"] == "customs_tradenet_v1"
     assert engine.fallback_calls == [
-        (1, ("header_parties",), (3,)),
         (1, ("tradenet_declaration_header", "tradenet_parties", "tradenet_financial"), (3,)),
         (1, ("tradenet_customs_total",), (3,)),
     ]
@@ -171,9 +169,54 @@ def test_high_confidence_labeled_customs_total_skips_narrow_retry(monkeypatch, t
     engine.run_fallback_regions = fallback
     process_dossier_file(tmp_path / "synthetic.pdf", ocr_engine=engine)
     assert engine.fallback_calls == [
-        (1, ("header_parties",), (1,)),
         (1, ("tradenet_declaration_header", "tradenet_parties", "tradenet_financial"), (1,)),
     ]
+
+
+def test_known_tradenet_family_requests_only_regions_for_missing_fields(monkeypatch):
+    from app.services.pipeline_runner import _tradenet_regions_for_missing_fields
+
+    complete = {
+        name: FieldExtractionDetail(value="synthetic")
+        for name in (
+            "declaration_number", "declaration_date", "declaration_type", "exporter", "importer",
+            "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
+        )
+    }
+    monkeypatch.setattr("app.services.pipeline_runner.extract_tradenet_fields", lambda *a, **k: complete)
+    image = np.zeros((100, 120, 3), dtype=np.uint8)
+    assert _tradenet_regions_for_missing_fields([], 3, image, "customs_tradenet_v1") == []
+
+    missing_party = {**complete, "importer": FieldExtractionDetail(value=None)}
+    monkeypatch.setattr("app.services.pipeline_runner.extract_tradenet_fields", lambda *a, **k: missing_party)
+    assert _tradenet_regions_for_missing_fields([], 3, image, "customs_tradenet_v1") == ["tradenet_parties"]
+
+    # Unknown/other customs forms keep the conservative legacy regional set.
+    assert _tradenet_regions_for_missing_fields([], 3, image, None) == [
+        "tradenet_declaration_header", "tradenet_parties", "tradenet_financial",
+    ]
+
+
+def test_customs_total_retry_keeps_the_established_low_confidence_threshold():
+    from app.services.pipeline_runner import _needs_tradenet_total_retry
+
+    assert _needs_tradenet_total_retry(FieldExtractionDetail(value=None)) is True
+    assert _needs_tradenet_total_retry(FieldExtractionDetail(value="100", confidence=0.805)) is True
+    assert _needs_tradenet_total_retry(FieldExtractionDetail(value="100", confidence=0.82)) is False
+    assert _needs_tradenet_total_retry(FieldExtractionDetail(value="100", confidence=0.9)) is False
+
+
+def test_producer_family_controls_processing_type_without_rewriting_generic_metadata():
+    from app.services.pipeline_runner import _semantic_processing_classification
+
+    receipt = DocumentClassification(document_type="receipt", confidence=0.85, matched_keywords=["ticket"])
+    processed = _semantic_processing_classification(receipt, "sotacib_kasserine_white_invoice_v1")
+    assert receipt.document_type == "receipt"
+    assert processed.document_type == "invoice"
+    assert processed.matched_keywords == ["ticket"]
+
+    # Generic receipts without a known invoice family remain receipts.
+    assert _semantic_processing_classification(receipt, None).document_type == "receipt"
 
 
 def test_existing_single_document_entry_point_signature_remains_compatible():

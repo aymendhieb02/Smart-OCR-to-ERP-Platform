@@ -114,7 +114,7 @@ def process_dossier_file(
         suspected_tradenet_pages = [
             item.page_number for item in page_classifications
             if item.document_type == "customs_declaration"
-            and item.document_family in {None, "customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}
+            and item.document_family is None
         ]
         fallback_runner = getattr(engine, "run_fallback_regions", None)
         if suspected_tradenet_pages and callable(fallback_runner):
@@ -136,11 +136,24 @@ def process_dossier_file(
         if tradenet_pages and callable(fallback_runner):
             targeted_started = time.perf_counter()
             with _timer_stage(timer, "tradenet_targeted_ocr", pages=tradenet_pages):
-                targeted_lines = fallback_runner(
-                    [document.images[page_number - 1] for page_number in tradenet_pages],
-                    ["tradenet_declaration_header", "tradenet_parties", "tradenet_financial"],
-                    page_numbers=tradenet_pages,
-                )
+                targeted_lines = []
+                for page_number in tradenet_pages:
+                    page_classification = next(
+                        (item for item in page_classifications if item.page_number == page_number),
+                        None,
+                    )
+                    page_lines = [line for line in ocr_result.lines if line.page_number == page_number]
+                    image = document.images[page_number - 1]
+                    requested_regions = _tradenet_regions_for_missing_fields(
+                        page_lines,
+                        page_number,
+                        image,
+                        page_classification.document_family if page_classification else None,
+                    )
+                    if requested_regions:
+                        targeted_lines.extend(fallback_runner(
+                            [image], requested_regions, page_numbers=[page_number],
+                        ))
             timings["tradenet_targeted_ocr"] = round(time.perf_counter() - targeted_started, 4)
             timings["tradenet_targeted_lines"] = len(targeted_lines)
             if targeted_lines:
@@ -156,7 +169,7 @@ def process_dossier_file(
                     page_dimensions={page_number: (int(image.shape[1]), int(image.shape[0]))},
                 )
                 total = preview_fields["customs_total_value_tnd"]
-                if total.value is None or (total.confidence or 0.0) < 0.82:
+                if _needs_tradenet_total_retry(total):
                     total_retry_pages.append(page_number)
             if total_retry_pages:
                 retry_started = time.perf_counter()
@@ -297,6 +310,48 @@ def _canonicalize_tradenet_importer(fields: dict, document_family: str | None) -
     return reason
 
 
+def _tradenet_regions_for_missing_fields(
+    lines: list[OCRLine],
+    page_number: int,
+    image,
+    document_family: str | None,
+) -> list[str]:
+    """Request only TradeNet regions that cover fields absent from page OCR."""
+    all_regions = ["tradenet_declaration_header", "tradenet_parties", "tradenet_financial"]
+    if document_family != "customs_tradenet_v1":
+        return all_regions
+
+    fields = extract_tradenet_fields(
+        lines,
+        page_dimensions={page_number: (int(image.shape[1]), int(image.shape[0]))},
+    )
+    regions: list[str] = []
+    if any(fields[name].value in (None, "") for name in (
+        "declaration_number", "declaration_date", "declaration_type",
+    )):
+        regions.append("tradenet_declaration_header")
+    if any(fields[name].value in (None, "") for name in ("exporter", "importer")):
+        regions.append("tradenet_parties")
+    if any(fields[name].value in (None, "") for name in (
+        "ptfn_amount", "currency_conversion_rate", "customs_total_value_tnd",
+    )):
+        regions.append("tradenet_financial")
+    return regions
+
+
+def _needs_tradenet_total_retry(detail: FieldExtractionDetail) -> bool:
+    """Keep the established narrow retry for absent or low-confidence customs totals."""
+    return detail.value in (None, "") or (detail.confidence or 0.0) < 0.82
+
+
+def _semantic_processing_classification(classification, document_family: str | None):
+    """Keep generic classification diagnostic while family identity drives processing."""
+    invoice_families = {*PRODUCER_REVIEW_FIELDS, "ruspina_reinvoice_v1"}
+    if document_family in invoice_families and classification.document_type != "invoice":
+        return classification.model_copy(update={"document_type": "invoice"})
+    return classification
+
+
 def process_document_file(
     path: Path,
     *,
@@ -371,11 +426,12 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         layout_debug = analyze_document_layout(ocr_result.lines)
     timings["layout_analysis"] = round(time.perf_counter() - stage_started, 4)
     classification = classify_document(ocr_result.raw_text, ocr_result.lines)
+    processing_classification = _semantic_processing_classification(classification, document_family)
     stage_started = time.perf_counter()
     fields, candidates, field_confidences, extraction_debug = extract_with_candidates(
         ocr_result.raw_text,
         ocr_result.lines,
-        classification,
+        processing_classification,
         timing_recorder=timer,
     )
     if ocr_engine and ocr_engine.mode == "balanced" and not extraction_debug.get("fallback_recovery"):
@@ -400,10 +456,11 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
                 with _timer_stage(timer, "layout_analysis", fallback=True):
                     layout_debug = analyze_document_layout(ocr_result.lines)
                 classification = classify_document(ocr_result.raw_text, ocr_result.lines)
+                processing_classification = _semantic_processing_classification(classification, document_family)
                 fields, candidates, field_confidences, extraction_debug = extract_with_candidates(
                     ocr_result.raw_text,
                     ocr_result.lines,
-                    classification,
+                    processing_classification,
                     timing_recorder=timer,
                 )
                 extraction_debug["fallback_recovery"] = {
@@ -565,7 +622,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
     with _timer_stage(timer, "financial_validation", part="validate_invoice"):
         producer_total = producer_semantics.get("total")
         validation = validate_invoice(
-            fields, ocr_result, classification,
+            fields, ocr_result, processing_classification,
             producer_invoice=is_producer_invoice,
             producer_total=float(producer_total.value) if producer_total and producer_total.value is not None else None,
             producer_tax_applicable=bool(fields.tax_rate is not None or fields.tva_amount is not None),
@@ -601,7 +658,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         financial_reasoning = reason_financials(
             fields,
             all_items,
-            document_type=classification.document_type,
+            document_type=processing_classification.document_type,
             producer_invoice=is_producer_invoice,
             producer_total=float(producer_semantics["total"].value)
             if producer_semantics.get("total") and producer_semantics["total"].value is not None else None,
@@ -676,7 +733,7 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             source_file=document.source_file,
             ocr_engine=ocr_result.engine,
             confidence=ocr_result.confidence,
-            document_type=classification.document_type,
+            document_type=processing_classification.document_type,
             field_confidences=field_confidences,
             languages=["fr", "en", "ar"],
             expanded_fields=expanded_fields,
