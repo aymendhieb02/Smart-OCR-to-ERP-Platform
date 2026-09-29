@@ -20,7 +20,7 @@ from app.services.tradenet_field_extractor import extract_tradenet_fields
 from app.services.ruspina_field_extractor import extract_ruspina_fields
 from app.services.producer_invoice_review import (
     ENFIDHA_FAMILY, GENERAL_PRODUCER_FAMILY, PRODUCER_REVIEW_FIELDS,
-    SOTACIB_FAMILIES, apply_producer_review_fields, prepare_producer_fields,
+    SOTACIB_FAMILIES, apply_producer_review_fields, merge_producer_semantics, prepare_producer_fields,
     recover_sotacib_total_ht,
 )
 from app.services.producer_table_reader import extract_producer_table_items
@@ -235,7 +235,9 @@ def _apply_family_review_corrections(
         detail.display_value = str(detail.value) if detail.value is not None else ""
         if document_family == "ruspina_reinvoice_v1":
             detail.normalized_value = normalize_ruspina_review_value(field_name, detail.value)
-        if not detail.source:
+        if document_family in PRODUCER_REVIEW_FIELDS:
+            detail.source = "human correction"
+        elif not detail.source:
             detail.source = "human correction"
         if detail.confidence is None:
             detail.confidence = 1.0
@@ -471,6 +473,8 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         quality_gate = apply_extraction_quality_gate(fields, candidates, field_confidences)
         fields = quality_gate.sanitized_fields
     expanded_fields = build_expanded_fields(fields, candidates, field_confidences, ocr_result.raw_text)
+    if is_producer_invoice and document_family != "ruspina_reinvoice_v1":
+        merge_producer_semantics(expanded_fields, producer_semantics, document_family)
     if ruspina is not None:
         expanded_fields.update(ruspina.fields)
         for source_name, target_name in (("seller", "supplier_name"), ("buyer", "customer_name")):
@@ -535,6 +539,9 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             fields,
             all_items,
             document_type=classification.document_type,
+            producer_invoice=is_producer_invoice,
+            producer_total=float(producer_semantics["total"].value)
+            if producer_semantics.get("total") and producer_semantics["total"].value is not None else None,
             shipping=_expanded_number(expanded_fields, "shipping_amount"),
             discount=_expanded_number(expanded_fields, "discount_amount"),
             stamp_tax=_expanded_number(expanded_fields, "stamp_tax_amount"),

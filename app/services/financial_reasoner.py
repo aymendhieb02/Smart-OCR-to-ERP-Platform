@@ -10,6 +10,8 @@ def reason_financials(
     fields: ExtractedInvoiceFields,
     line_items: list[LineItem],
     *,
+    producer_invoice: bool = False,
+    producer_total: float | None = None,
     shipping: float | None = None,
     discount: float | None = None,
     stamp_tax: float | None = None,
@@ -43,12 +45,23 @@ def reason_financials(
         if not checks["ht_vat_adjustments_to_ttc"]["passed"]:
             errors.append(f"HT + VAT + shipping + stamp tax - discount = {expected}, TTC = {fields.amount_ttc}")
         checks["ht_vat_shipping_discount_to_ttc"] = checks["ht_vat_adjustments_to_ttc"]
-    else:
+    elif not (producer_invoice and producer_total is not None):
         warnings.append("insufficient totals for complete financial check")
 
     line_totals = [item.line_total_ht if item.line_total_ht is not None else item.total for item in line_items]
     line_totals = [value for value in line_totals if value is not None]
-    if line_totals and fields.amount_ht is not None:
+    if line_totals and producer_invoice and producer_total is not None:
+        line_sum = round(sum(line_totals), 3)
+        delta = round(abs(line_sum - producer_total), 3)
+        checks["line_sum_to_producer_total"] = {
+            "expected": producer_total,
+            "actual": line_sum,
+            "delta": delta,
+            "passed": delta <= max(tolerance, abs(producer_total) * 0.02),
+        }
+        if not checks["line_sum_to_producer_total"]["passed"]:
+            warnings.append(f"line totals sum to {line_sum}, producer total is {producer_total}")
+    elif line_totals and fields.amount_ht is not None:
         line_sum = round(sum(line_totals), 3)
         delta = round(abs(line_sum - fields.amount_ht), 3)
         checks["line_sum_to_ht"] = {"expected": fields.amount_ht, "actual": line_sum, "delta": delta, "passed": delta <= max(tolerance, abs(fields.amount_ht) * 0.02)}

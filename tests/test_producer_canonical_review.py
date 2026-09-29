@@ -8,6 +8,7 @@ from app.services.producer_invoice_review import (
     PRODUCER_REVIEW_FIELDS,
     SOTACIB_FAMILIES,
     apply_producer_review_fields,
+    merge_producer_semantics,
 )
 
 
@@ -48,6 +49,71 @@ def test_canonical_adapter_preserves_machine_value_and_field_evidence():
     assert canonical.evidence_text == "SELLER: Supplier OCR"
     assert canonical.confidence == 0.81 and canonical.page == 1
     assert "client_tax_id" not in response.expanded_fields or response.expanded_fields["client_tax_id"].value is None
+
+
+def test_producer_semantics_override_legacy_values_but_preserve_human_and_template_values():
+    expanded = {
+        "client": FieldExtractionDetail(value="SUPPLIER_ADDRESS_TEST", source="legacy generic alias"),
+        "total": FieldExtractionDetail(value=999.0, source="generic amount candidate"),
+        "seller": FieldExtractionDetail(value="HUMAN_SELLER_TEST", source="human correction"),
+        "invoice_number": FieldExtractionDetail(value="TEMPLATE-INV-TEST", source="known-template"),
+    }
+    semantics = {
+        "client": FieldExtractionDetail(value="CUSTOMER_TEST", source="generic semantic label"),
+        "total": FieldExtractionDetail(value=1000.0, source="generic semantic total label"),
+        "seller": FieldExtractionDetail(value="RAW_SELLER_TEST", source="generic semantic label"),
+        "invoice_number": FieldExtractionDetail(value="RAW-INV-TEST", source="generic semantic label"),
+    }
+
+    merge_producer_semantics(expanded, semantics, ENFIDHA_FAMILY)
+
+    assert expanded["client"].value == "CUSTOMER_TEST"
+    assert expanded["total"].value == 1000.0
+    assert expanded["seller"].value == "HUMAN_SELLER_TEST"
+    assert expanded["invoice_number"].value == "TEMPLATE-INV-TEST"
+
+
+def test_enfidha_canonical_response_exposes_all_extracted_business_fields():
+    from types import SimpleNamespace
+
+    from app.core.schemas import ExtractedInvoiceFields
+
+    lines = [
+        SimpleNamespace(text="Client: CUSTOMER_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Client RC: RC-TEST-001", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Consignee: RECEIVER_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Consignee address: RECEIVER_TEST STREET", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Total including all taxes: 1234.00 EUR", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Amount in words: ONE THOUSAND TWO HUNDRED THIRTY FOUR EUROS", confidence=0.95, page_number=1),
+        SimpleNamespace(text="HS code: HS-TEST-001", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Proforma invoice No: PF-TEST-001", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Proforma date: 04/01/2026", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Incoterm: EXW", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Origin: COUNTRY_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Destination: COUNTRY_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Shipment: PARTIAL_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Payment: TRANSFER_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="Bank: BANK_TEST", confidence=0.95, page_number=1),
+        SimpleNamespace(text="IBAN: IBAN-TEST-001", confidence=0.95, page_number=1),
+        SimpleNamespace(text="SWIFT: SWIFT-TEST", confidence=0.95, page_number=1),
+    ]
+    response = SimpleNamespace(
+        detected_fields=ExtractedInvoiceFields(customer_name="SUPPLIER_ADDRESS_TEST"),
+        expanded_fields={"client": FieldExtractionDetail(value="SUPPLIER_ADDRESS_TEST", source="legacy generic alias")},
+    )
+
+    apply_producer_review_fields(response, ENFIDHA_FAMILY, lines)
+
+    expected = {
+        "client": "CUSTOMER_TEST", "client_rc": "RC-TEST-001", "consignee": "RECEIVER_TEST",
+        "consignee_address": "RECEIVER_TEST STREET", "total": 1234.0,
+        "total_amount_words": "ONE THOUSAND TWO HUNDRED THIRTY FOUR EUROS", "hs_code": "HS-TEST-001",
+        "proforma_invoice_number": "PF-TEST-001", "proforma_invoice_date": "04/01/2026",
+        "incoterm": "EXW", "origin": "COUNTRY_TEST", "destination": "COUNTRY_TEST",
+        "shipment": "PARTIAL_TEST", "payment": "TRANSFER_TEST", "bank": "BANK_TEST",
+        "iban": "IBAN-TEST-001", "swift": "SWIFT-TEST",
+    }
+    assert {name: response.expanded_fields[name].value for name in expected} == expected
 
 
 def test_family_source_labels_map_to_distinct_canonical_amount_and_tariff_concepts():
@@ -138,6 +204,7 @@ def test_producer_field_correction_uses_existing_store_and_preserves_machine_evi
     assert response.expanded_fields["seller"].machine_value == "SUPPLIER_TEST"
     assert response.expanded_fields["seller"].evidence_text == "seller: SUPPLIER_TEST"
     assert response.expanded_fields["seller"].page == 1
+    assert response.expanded_fields["seller"].source == "human correction"
     assert all(response.expanded_fields[key].value == payload.field_corrections[key]["corrected_value"]
                for key in payload.field_corrections)
 

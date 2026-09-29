@@ -233,11 +233,7 @@ def apply_producer_review_fields(response: ProcessInvoiceResponse, family: str |
     labels = _labels_for_family(family_key)
     semantic = _extract_labeled_details(ocr_lines or [], labels)
     semantic.update(_extract_geometric_parties(ocr_lines or [], semantic))
-    for field_name, detail in semantic.items():
-        current = expanded.get(field_name)
-        source = str(getattr(current, "source", "") or "").lower()
-        if current is None or current.value in (None, "") or not any(token in source for token in ("human correction", "known-template", "template enhancement")):
-            expanded[field_name] = detail
+    merge_producer_semantics(expanded, semantic, family_key)
     for canonical in allowed:
         if canonical in expanded:
             continue
@@ -254,6 +250,31 @@ def apply_producer_review_fields(response: ProcessInvoiceResponse, family: str |
         if detail.machine_value is None:
             detail.machine_value = detail.value
         expanded[canonical] = detail.model_copy(deep=True)
+
+
+def merge_producer_semantics(
+    expanded_fields: dict[str, FieldExtractionDetail],
+    producer_semantics: dict[str, FieldExtractionDetail],
+    family: str | None,
+) -> None:
+    """Publish family-extracted canonical values ahead of legacy response data.
+
+    Human corrections and explicit template enhancements remain authoritative;
+    otherwise the producer semantic value replaces a generic field with the
+    same presentation key.
+    """
+    family_key = family if family in PRODUCER_REVIEW_FIELDS else GENERAL_PRODUCER_FAMILY
+    allowed = set(PRODUCER_REVIEW_FIELDS.get(family_key, ()))
+    for field_name, detail in producer_semantics.items():
+        if field_name not in allowed or detail is None or detail.value in (None, ""):
+            continue
+        current = expanded_fields.get(field_name)
+        source = str(getattr(current, "source", "") or "").casefold()
+        if current is not None and current.value not in (None, "") and any(
+            marker in source for marker in ("human correction", "manual correction", "review correction", "known-template", "template enhancement")
+        ):
+            continue
+        expanded_fields[field_name] = detail.model_copy(deep=True)
 
 
 def sanitize_legacy_producer_financial_fields(fields, lines: list | None) -> None:

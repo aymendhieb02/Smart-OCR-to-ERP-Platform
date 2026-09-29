@@ -187,6 +187,33 @@ def test_simple_line_item_does_not_relabel_a_ttc_only_value_as_line_total():
     assert item["line_total"] is None
 
 
+def test_page1_canonical_client_wins_over_legacy_customer_and_missing_stays_null():
+    pages = _result_for_pages((PRODUCER,))
+    response = pages.logical_documents[0].response
+    response.detected_fields = {
+        "invoice_number": "INV-TEST-001",
+        "customer_name": "SUPPLIER_ADDRESS_TEST",
+    }
+    response.expanded_fields = {
+        "client": FieldExtractionDetail(value="CUSTOMER_TEST", source="generic semantic label"),
+        "invoice_number": FieldExtractionDetail(value="INV-TEST-001", source="generic semantic label"),
+    }
+
+    producer = _field_map(build_simple_dossier_output(pages).page1)
+
+    assert producer["client"] == "CUSTOMER_TEST"
+
+    response.expanded_fields["client"] = FieldExtractionDetail(
+        value="CUSTOMER_CORRECTED_TEST", canonical_value="CUSTOMER_TEST", source="human correction",
+    )
+    producer = _field_map(build_simple_dossier_output(pages).page1)
+    assert producer["client"] == "CUSTOMER_CORRECTED_TEST"
+
+    response.expanded_fields["client"] = FieldExtractionDetail(value=None, source="not extracted")
+    producer = _field_map(build_simple_dossier_output(pages).page1)
+    assert producer["client"] is None
+
+
 def test_line_item_corrections_serialize_current_effective_cells():
     pages = _result_for_pages((PRODUCER,))
     response = pages.logical_documents[0].response

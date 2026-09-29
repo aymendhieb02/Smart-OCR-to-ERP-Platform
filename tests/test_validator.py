@@ -1,7 +1,8 @@
 from datetime import date
 
-from app.core.schemas import ExtractedInvoiceFields, OCRResult
+from app.core.schemas import ExtractedInvoiceFields, LineItem, OCRResult
 from app.services.validator import validate_invoice
+from app.services.financial_reasoner import reason_financials
 
 
 def test_valid_amounts_pass_validation():
@@ -69,3 +70,45 @@ def test_visible_table_without_parsed_rows_needs_review():
     result = validate_invoice(fields, ocr)
     assert result.status == "needs_review"
     assert any("Product table text" in warning for warning in result.warnings)
+
+
+def test_producer_total_and_line_sum_do_not_require_generic_ttc_or_tax_fields():
+    fields = ExtractedInvoiceFields(
+        invoice_number="INV-TEST-001",
+        invoice_date=date(2026, 1, 4),
+        currency="EUR",
+        supplier_name="SUPPLIER_TEST",
+        amount_ht=None,
+        tva_amount=None,
+        amount_ttc=None,
+        tax_rate=None,
+    )
+    row = LineItem(
+        description="CEMENT_TEST", quantity=20, unit="MT", unit_price=50,
+        line_total_ht=1000,
+    )
+
+    validation = validate_invoice(
+        fields, document_type="invoice", producer_invoice=True, producer_total=1000,
+        producer_tax_applicable=False,
+    )
+    financials = reason_financials(
+        fields, [row], document_type="invoice", producer_invoice=True, producer_total=1000,
+    )
+
+    assert not any("Total amount TTC is missing" in warning for warning in validation.warnings)
+    assert not any("Tax rate is missing" in warning for warning in validation.warnings)
+    assert not any("insufficient totals" in warning.lower() for warning in validation.warnings)
+    assert "line_sum_to_producer_total" in financials["checks"]
+    assert financials["checks"]["line_sum_to_producer_total"]["passed"] is True
+    assert not any("insufficient totals" in warning for warning in financials["financial_warnings"])
+
+
+def test_producer_missing_total_uses_producer_wording_not_ttc_wording():
+    result = validate_invoice(
+        ExtractedInvoiceFields(invoice_number="INV-TEST-001"),
+        document_type="invoice", producer_invoice=True, producer_total=None,
+    )
+
+    assert "Producer invoice total is missing" in result.warnings
+    assert "Total amount TTC is missing" not in result.warnings

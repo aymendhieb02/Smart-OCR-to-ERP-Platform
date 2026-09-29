@@ -406,6 +406,11 @@ def test_same_sotacib_page_has_equivalent_extraction_alone_and_in_three_page_dos
     assert one_fields["invoice_date"] == "04/01/2026"
     assert one_fields["client"] == "CUSTOMER_TEST"
     assert one_fields["total_ht"] == 1234.0
+    for name in ("seller", "client", "total", "total_amount_words", "hs_code", "incoterm"):
+        assert one_producer.response.erp_json.expanded_fields[name].value == one_producer.response.expanded_fields[name].value
+    assert not any("Total amount TTC is missing" in warning for warning in one_producer.response.validation.warnings)
+    assert not any("Tax rate is missing" in warning for warning in one_producer.response.validation.warnings)
+    assert "line_sum_to_producer_total" in one_producer.response.financial_reasoning["checks"]
 
     def row_snapshot(response):
         return [
