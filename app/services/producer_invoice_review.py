@@ -84,6 +84,20 @@ ENFIDHA_LABELS = {
     "bag_weight": (r"(?:weight|poids)\s*(?:per\s*)?(?:bag|sac)", r"(?:bag|sac)\s*weight"),
     "truck_count": (r"(?:number\s*of\s*)?(?:trucks?|camions?)",),
 }
+_PROFORMA_REFERENCE_LINE = re.compile(
+    r"\bconform\s+to\s+(?:the\s+)?pro\s*forma\s+invoice\s*"
+    r"(?:n(?:o|[°º])?\s*[:#.]?\s*|number\s*[:#.]?\s*|#\s*)?"
+    r"(?P<number>[A-Z0-9][A-Z0-9/-]{0,30})\s+"
+    r"(?:du|of|dated)\s+"
+    r"(?P<date>\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b",
+    re.IGNORECASE,
+)
+_PROFORMA_REFERENCE_ANCHOR = re.compile(
+    r"\bconform\b.{0,35}\bto\b.{0,20}\bpro\s*forma\b.{0,24}\binvoice\b",
+    re.IGNORECASE,
+)
+_PROFORMA_REFERENCE_NUMBER = re.compile(r"^[A-Z0-9]+(?:[/-][A-Z0-9]+)*$", re.IGNORECASE)
+_PROFORMA_REFERENCE_DATE = re.compile(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b")
 SOTACIB_LABELS = {
     **COMMON_LABELS,
     "client_tax_id": (r"client\s*(?:tax\s*(?:id|number)|matricule\s*fiscal)", r"matricule\s*fiscal\s*(?:du\s*)?client", r"matricule\s*fiscale?(?:\s*[?d]*)?"),
@@ -420,6 +434,165 @@ def _plain_line(line) -> str:
     return strip_accents(str(getattr(line, "text", "") or "")).lower()
 
 
+def _normalize_payment_transcription(value: str) -> str:
+    """Repair only clear OCR variants of the printed 'bank transfer' method."""
+    match = re.match(
+        r"^(?P<prefix>\s*bank)(?P<gap>\s*)(?P<method>(?:t|ty)?ransfer(?:t)?)(?P<suffix>\b.*)$",
+        value,
+        re.IGNORECASE,
+    )
+    if not match or match.group("method").casefold() == "transfer":
+        return value
+    method = match.group("method")
+    if method.isupper():
+        normalized_method = "TRANSFER"
+    elif method[:1].isupper():
+        normalized_method = "Transfer"
+    else:
+        normalized_method = "transfer"
+    return f"{match.group('prefix')} {normalized_method}{match.group('suffix')}"
+
+
+def recover_enfidha_proforma_reference(
+    lines: list,
+    family: str | None,
+    images: list,
+    ocr_engine,
+    *,
+    physical_page_numbers: tuple[int, ...] | list[int] | None = None,
+) -> tuple[dict[str, FieldExtractionDetail], list, dict]:
+    """Extract a split proforma reference, using one label-relative crop only if needed."""
+    debug = {"attempted": False, "reason": "not_applicable", "region": None, "physical_page": None}
+    if family != ENFIDHA_FAMILY:
+        return {}, [], debug
+
+    found = _proforma_reference_details(lines)
+    required = {"proforma_invoice_number", "proforma_invoice_date"}
+    if required.issubset(found):
+        debug["reason"] = "reference_present_in_existing_ocr"
+        return found, [], debug
+
+    anchor = next((line for line in lines if _PROFORMA_REFERENCE_ANCHOR.search(_plain_line(line))), None)
+    if anchor is None:
+        debug["reason"] = "proforma_reference_label_not_found"
+        return found, [], debug
+    if not images or not callable(getattr(ocr_engine, "run_targeted_region", None)):
+        debug["reason"] = "targeted_ocr_unavailable"
+        return found, [], debug
+
+    page_numbers = tuple(physical_page_numbers or range(1, len(images) + 1))
+    try:
+        image_index = page_numbers.index(int(getattr(anchor, "page_number", 1) or 1))
+    except ValueError:
+        debug["reason"] = "label_page_image_unavailable"
+        return found, [], debug
+    if image_index >= len(images) or not isinstance(getattr(anchor, "bbox", None), BoundingBox):
+        debug["reason"] = "label_geometry_unavailable"
+        return found, [], debug
+
+    from app.services.table_regions import build_label_value_region
+
+    region = build_label_value_region(
+        images[image_index], anchor.bbox, name="producer_proforma_reference",
+        page_width=getattr(anchor, "page_width", None), page_height=getattr(anchor, "page_height", None),
+    )
+    if region is None:
+        debug["reason"] = "reference_value_region_unavailable"
+        return found, [], debug
+    page_number = int(getattr(anchor, "page_number", 1) or 1)
+    debug.update({"attempted": True, "reason": "reference_value_missing", "region": region.name,
+                  "physical_page": page_number})
+    targeted_lines = ocr_engine.run_targeted_region(images[image_index], region, page_number=page_number) or []
+    found.update({name: detail for name, detail in _proforma_reference_details([*lines, *targeted_lines]).items()
+                  if name not in found})
+    debug["reason"] = "reference_recovered" if required.issubset(found) else "targeted_reference_incomplete"
+    debug["added_lines"] = len(targeted_lines)
+    return found, targeted_lines, debug
+
+
+def _proforma_reference_details(lines: list) -> dict[str, FieldExtractionDetail]:
+    labels = [line for line in lines if _PROFORMA_REFERENCE_ANCHOR.search(_plain_line(line))
+              and isinstance(getattr(line, "bbox", None), BoundingBox)]
+    for label in labels:
+        text = str(getattr(label, "text", "") or "").strip()
+        inline = _PROFORMA_REFERENCE_LINE.search(text)
+        if inline:
+            result = {}
+            raw_number = inline.group("number").strip(" .,:;#-")
+            raw_date = inline.group("date")
+            if raw_number:
+                result["proforma_invoice_number"] = _proforma_detail(label, label, raw_number, raw_number)
+            parsed_date = parse_date(raw_date)
+            if parsed_date:
+                result["proforma_invoice_date"] = _proforma_detail(
+                    label, label, parsed_date.isoformat(), raw_date,
+                )
+            if result:
+                return result
+
+        page_lines = [line for line in lines if getattr(line, "page_number", None) == getattr(label, "page_number", None)
+                      and isinstance(getattr(line, "bbox", None), BoundingBox)]
+        width = float(getattr(label, "page_width", 0) or max((line.bbox.x2 for line in page_lines), default=0))
+        height = float(getattr(label, "page_height", 0) or max((line.bbox.y2 for line in page_lines), default=0))
+        if width <= 0 or height <= 0:
+            continue
+        label_box = label.bbox
+        label_y = (label_box.y1 + label_box.y2) / 2
+        vertical_tolerance = max(18.0, (label_box.y2 - label_box.y1) * 1.6)
+        candidates = [line for line in lines if line is not label and
+                      getattr(line, "page_number", None) == getattr(label, "page_number", None) and
+                      isinstance(getattr(line, "bbox", None), BoundingBox) and
+                      line.bbox.x1 >= label_box.x2 - width * 0.005 and
+                      abs((line.bbox.y1 + line.bbox.y2) / 2 - label_y) <= vertical_tolerance]
+        candidates.sort(key=lambda line: (line.bbox.x1, abs((line.bbox.y1 + line.bbox.y2) / 2 - label_y)))
+
+        number_pair = None
+        date_pair = None
+        for line in candidates:
+            candidate_text = str(getattr(line, "text", "") or "").strip().strip(" .,:;#")
+            if not candidate_text:
+                continue
+            raw_date_match = _PROFORMA_REFERENCE_DATE.search(candidate_text)
+            if raw_date_match:
+                parsed_date = parse_date(raw_date_match.group(0))
+                if parsed_date and date_pair is None:
+                    date_pair = (line, raw_date_match.group(0), parsed_date)
+                continue
+            if (number_pair is None and _PROFORMA_REFERENCE_NUMBER.fullmatch(candidate_text)
+                    and re.search(r"\d", candidate_text)
+                    and not re.fullmatch(r"(?:du|of|dated)", candidate_text, re.IGNORECASE)):
+                number_pair = (line, candidate_text)
+
+        result = {}
+        if number_pair:
+            result["proforma_invoice_number"] = _proforma_detail(
+                label, number_pair[0], number_pair[1], number_pair[1],
+            )
+        if date_pair:
+            result["proforma_invoice_date"] = _proforma_detail(
+                label, date_pair[0], date_pair[2].isoformat(), date_pair[1],
+            )
+        if result:
+            return result
+    return {}
+
+
+def _proforma_detail(label, value_line, value: str, raw_value: str) -> FieldExtractionDetail:
+    observations = [label] if value_line is label else [label, value_line]
+    boxes = [line.bbox for line in observations if isinstance(getattr(line, "bbox", None), BoundingBox)]
+    detail = FieldExtractionDetail(
+        value=value, display_value=raw_value, machine_value=raw_value, canonical_value=value,
+        normalized_value=value, confidence=min((getattr(line, "confidence", None) or 0.0) for line in observations),
+        bbox=BoundingBox(x1=min(box.x1 for box in boxes), y1=min(box.y1 for box in boxes),
+                         x2=max(box.x2 for box in boxes), y2=max(box.y2 for box in boxes)) if boxes else None,
+        page=getattr(label, "page_number", None), page_width=getattr(label, "page_width", None),
+        page_height=getattr(label, "page_height", None), coordinate_space=getattr(label, "coordinate_space", None),
+        line_index=getattr(label, "line_index", None), source="label-relative proforma invoice reference",
+        evidence_text="\n".join(str(getattr(line, "text", "") or "").strip() for line in observations),
+    )
+    return detail
+
+
 def _looks_like_party(text: str) -> bool:
     value = str(text or "").strip()
     return len(value) >= 5 and sum(char.isalpha() for char in value) >= 4 and not re.search(r"\d{5,}", value)
@@ -490,9 +663,40 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
                     extracted[field_name].evidence_text = f"{text} {getattr(evidence_line, 'text', '')}".strip()
                 else:
                     evidence_line = paired_line or line
-                    extracted[field_name] = _detail(evidence_line, value, "generic semantic label")
-                    extracted[field_name].evidence_text = f"{text} {getattr(evidence_line, 'text', '')}".strip()
+                    canonical_value = _normalize_payment_transcription(value) if field_name == "payment" else value
+                    extracted[field_name] = _detail(evidence_line, canonical_value, "generic semantic label")
+                    if canonical_value != value:
+                        extracted[field_name].machine_value = value
+                        extracted[field_name].canonical_value = canonical_value
+                        extracted[field_name].normalized_value = canonical_value
+                        extracted[field_name].display_value = canonical_value
+                    extracted[field_name].evidence_text = (
+                        text if evidence_line is line
+                        else f"{text} {getattr(evidence_line, 'text', '')}".strip()
+                    )
                 break
+    if "proforma_invoice_number" in field_labels or "proforma_invoice_date" in field_labels:
+        for line in lines:
+            match = _PROFORMA_REFERENCE_LINE.search(str(getattr(line, "text", "") or ""))
+            if not match:
+                continue
+            if "proforma_invoice_number" in field_labels and "proforma_invoice_number" not in extracted:
+                number = match.group("number").strip(" .,:;#-")
+                if number:
+                    extracted["proforma_invoice_number"] = _detail(
+                        line, number, "generic proforma invoice reference label",
+                    )
+            if "proforma_invoice_date" in field_labels and "proforma_invoice_date" not in extracted:
+                raw_date = match.group("date")
+                parsed_date = parse_date(raw_date)
+                if parsed_date:
+                    detail = _detail(line, parsed_date.isoformat(), "generic proforma invoice reference label")
+                    detail.display_value = raw_date
+                    detail.machine_value = raw_date
+                    detail.canonical_value = parsed_date.isoformat()
+                    detail.normalized_value = parsed_date.isoformat()
+                    extracted["proforma_invoice_date"] = detail
+            break
     if "packaging" not in extracted:
         packaging_pattern = re.compile(r"\b(?:en\s+sac(?:s)?|bags?|sacs?|bulk|vrac)\b(?:\s+(?:of\s+)?\d{1,3}\s?kg)?", re.IGNORECASE)
         for line in lines:

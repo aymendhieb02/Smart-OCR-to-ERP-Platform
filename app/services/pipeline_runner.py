@@ -17,11 +17,11 @@ from app.services.extraction_quality import apply_extraction_quality_gate, build
 from app.services.field_enricher import build_expanded_fields, build_field_boxes
 from app.services.field_extractor import extract_with_candidates
 from app.services.tradenet_field_extractor import extract_tradenet_fields
-from app.services.ruspina_field_extractor import extract_ruspina_fields
+from app.services.ruspina_field_extractor import extract_ruspina_fields, recover_ruspina_net_weight
 from app.services.producer_invoice_review import (
     ENFIDHA_FAMILY, GENERAL_PRODUCER_FAMILY, PRODUCER_REVIEW_FIELDS,
     SOTACIB_FAMILIES, apply_producer_review_fields, merge_producer_semantics, prepare_producer_fields,
-    recover_sotacib_total_ht,
+    recover_enfidha_proforma_reference, recover_sotacib_total_ht,
 )
 from app.services.producer_table_reader import extract_producer_table_items
 from app.services.dossier_reconciler import reconcile_dossier
@@ -417,9 +417,19 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         or (document_family is None and classification.document_type in {"invoice", "credit_note"})
     )
     producer_semantics = {}
+    producer_proforma_recovery = {"attempted": False, "reason": "not_applicable"}
     sotacib_total_ht_fallback = {"attempted": False, "reason": "not_applicable"}
     if is_producer_invoice and document_family != "ruspina_reinvoice_v1":
+        if document_family == ENFIDHA_FAMILY:
+            proforma_details, proforma_lines, producer_proforma_recovery = recover_enfidha_proforma_reference(
+                ocr_result.lines, document_family, document.images, ocr_engine,
+                physical_page_numbers=physical_page_numbers,
+            )
+            if proforma_lines:
+                ocr_result = _merge_ocr_result(ocr_result, proforma_lines)
+                timings.update(getattr(ocr_engine, "last_timings", {}))
         producer_semantics = prepare_producer_fields(fields, ocr_result.lines, document_family)
+        producer_semantics.update(proforma_details if document_family == ENFIDHA_FAMILY else {})
         if document_family in SOTACIB_FAMILIES:
             total_ht_detail, targeted_lines, sotacib_total_ht_fallback = recover_sotacib_total_ht(
                 ocr_result.lines, document_family, document.images, ocr_engine,
@@ -438,6 +448,8 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             "rows": len(generic_table_rows),
             "replaced_legacy_rows": bool(generic_table_rows),
         }
+        if document_family == ENFIDHA_FAMILY:
+            extraction_debug["producer_proforma_recovery"] = producer_proforma_recovery
         if document_family in SOTACIB_FAMILIES:
             extraction_debug["sotacib_total_ht_fallback"] = sotacib_total_ht_fallback
     ruspina = None
@@ -448,6 +460,49 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             document_family=document_family,
             page_dimensions=_physical_page_dimensions(document, physical_page_numbers),
         )
+        ruspina_weight_recovery = {"attempted": False, "reason": "not_applicable"}
+        if "net_weight" not in ruspina.fields and ocr_engine:
+            weight_lines, ruspina_weight_recovery = recover_ruspina_net_weight(
+                ocr_result.lines, document.images, ocr_engine,
+                physical_page_numbers=physical_page_numbers,
+            )
+            if weight_lines:
+                ocr_result = _merge_ocr_result(ocr_result, weight_lines)
+                timings.update(getattr(ocr_engine, "last_timings", {}))
+                ruspina = extract_ruspina_fields(
+                    ocr_result.lines,
+                    document_family=document_family,
+                    page_dimensions=_physical_page_dimensions(document, physical_page_numbers),
+                )
+        ruspina_header_recovery = {"attempted": False, "pages": [], "added_lines": 0}
+        if ruspina.line_items and any(item.unit is None for item in ruspina.line_items) and ocr_engine:
+            fallback_runner = getattr(ocr_engine, "run_fallback_regions", None)
+            if callable(fallback_runner):
+                physical_pages = list(physical_page_numbers or range(1, len(document.images) + 1))
+                missing_unit_pages = {item.page for item in ruspina.line_items if item.unit is None}
+                selected = [
+                    (image, physical_pages[index])
+                    for index, image in enumerate(document.images)
+                    if index < len(physical_pages) and physical_pages[index] in missing_unit_pages
+                ]
+                if selected:
+                    requested_pages = [page for _image, page in selected]
+                    ruspina_header_recovery.update(attempted=True, pages=requested_pages)
+                    with _timer_stage(timer, "ruspina_unit_header_ocr", pages=requested_pages):
+                        targeted_lines = fallback_runner(
+                            [image for image, _page in selected],
+                            ["ruspina_table_header_unit"],
+                            page_numbers=requested_pages,
+                        )
+                    ruspina_header_recovery["added_lines"] = len(targeted_lines)
+                    if targeted_lines:
+                        ocr_result = _merge_ocr_result(ocr_result, targeted_lines)
+                        timings.update(getattr(ocr_engine, "last_timings", {}))
+                        ruspina = extract_ruspina_fields(
+                            ocr_result.lines,
+                            document_family=document_family,
+                            page_dimensions=_physical_page_dimensions(document, physical_page_numbers),
+                        )
         for source_name, target_name in (
             ("invoice_number", "invoice_number"), ("invoice_date", "invoice_date"),
             ("seller", "supplier_name"), ("buyer", "customer_name"), ("currency", "currency"),
@@ -484,6 +539,8 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         extraction_debug["ruspina_field_extraction"] = {
             "source_fields": sorted(ruspina.fields),
             "table_rows": len(ruspina.line_items),
+            "net_weight_recovery": ruspina_weight_recovery,
+            "unit_header_recovery": ruspina_header_recovery,
         }
     if fixed_customs_form or document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
         page_dimensions = _physical_page_dimensions(document, physical_page_numbers)
@@ -512,6 +569,12 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             producer_invoice=is_producer_invoice,
             producer_total=float(producer_total.value) if producer_total and producer_total.value is not None else None,
             producer_tax_applicable=bool(fields.tax_rate is not None or fields.tva_amount is not None),
+            ruspina_invoice=document_family == "ruspina_reinvoice_v1",
+            ruspina_total=(
+                float(ruspina.fields["total"].value)
+                if ruspina is not None and ruspina.fields.get("total") is not None
+                and ruspina.fields["total"].value is not None else None
+            ),
         )
     timings["table_extraction"] = round(time.perf_counter() - stage_started, 4)
     table_debug = extraction_debug.setdefault("table_extraction_debug", {})
@@ -542,6 +605,12 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
             producer_invoice=is_producer_invoice,
             producer_total=float(producer_semantics["total"].value)
             if producer_semantics.get("total") and producer_semantics["total"].value is not None else None,
+            ruspina_invoice=document_family == "ruspina_reinvoice_v1",
+            ruspina_total=(
+                float(ruspina.fields["total"].value)
+                if ruspina is not None and ruspina.fields.get("total") is not None
+                and ruspina.fields["total"].value is not None else None
+            ),
             shipping=_expanded_number(expanded_fields, "shipping_amount"),
             discount=_expanded_number(expanded_fields, "discount_amount"),
             stamp_tax=_expanded_number(expanded_fields, "stamp_tax_amount"),

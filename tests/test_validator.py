@@ -112,3 +112,26 @@ def test_producer_missing_total_uses_producer_wording_not_ttc_wording():
 
     assert "Producer invoice total is missing" in result.warnings
     assert "Total amount TTC is missing" not in result.warnings
+
+
+def test_ruspina_invoice_validates_its_total_and_rows_without_generic_tax_requirements():
+    fields = ExtractedInvoiceFields(
+        invoice_number="INV-TEST-001", invoice_date=date(2026, 1, 4),
+        supplier_name="SUPPLIER_TEST", currency="EUR",
+        amount_ht=None, tva_amount=None, amount_ttc=None, tax_rate=None,
+        line_items=[LineItem(description="CEMENT_TEST", quantity=10, unit="T", unit_price=100, total=1000)],
+    )
+
+    validation = validate_invoice(
+        fields, document_type="invoice", ruspina_invoice=True, ruspina_total=1000,
+    )
+    financials = reason_financials(
+        fields, fields.line_items, document_type="invoice",
+        ruspina_invoice=True, ruspina_total=1000,
+    )
+
+    assert not any("Total amount TTC" in warning for warning in validation.warnings)
+    assert not any("Tax rate" in warning for warning in validation.warnings)
+    assert not any("insufficient totals" in warning.lower() for warning in validation.warnings)
+    assert not any("insufficient totals" in warning.lower() for warning in financials["financial_warnings"])
+    assert financials["checks"]["line_sum_to_ruspina_total"]["passed"] is True
