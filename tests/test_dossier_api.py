@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.core.schemas import (
-    DocumentPreview, DossierLogicalDocument, ExtractedInvoiceFields,
+    DocumentPreview, DossierLogicalDocument, ExtractedInvoiceFields, FieldExtractionDetail,
     LineItem, PreviewPage, ProcessInvoiceResponse,
     ValidationResult,
 )
@@ -83,6 +83,73 @@ def test_process_dossier_supports_one_multi_page_logical_document(monkeypatch):
 def test_process_invoice_contract_remains_registered_as_process_invoice_response():
     route = next(route for route in routes.router.routes if getattr(route, "path", None) == "/process-invoice")
     assert route.response_model is ProcessInvoiceResponse
+
+
+def test_process_invoice_uses_dossier_orchestration_for_single_logical_document(monkeypatch):
+    group = _group(1, (1,), "sotacib_kasserine_white_invoice_v1")
+    response = _response("INV-TEST-001", 1)
+    response.expanded_fields["seller"] = FieldExtractionDetail(value="SUPPLIER_TEST", source="known-template")
+    preview = DocumentPreview(
+        source_file="one-page.pdf",
+        pages=[PreviewPage(page=1, url="/p1.png", width=100, height=200)],
+    )
+    result = DossierProcessResult(
+        source_file="one-page.pdf", page_count=1,
+        page_classifications=group.page_classifications,
+        logical_documents=(ProcessedLogicalDocument(group, response),),
+        document_preview=preview, ocr_engine="synthetic", timings={},
+    )
+    calls = []
+
+    def process_with_dossier(path, **kwargs):
+        calls.append((path, kwargs))
+        return result
+
+    monkeypatch.setattr(routes, "process_dossier_file", process_with_dossier)
+    writes = []
+    monkeypatch.setattr(routes, "write_erp_json", lambda payload: writes.append("erp"))
+    monkeypatch.setattr(routes, "write_invoice_validation_report", lambda *args: writes.append("validation"))
+
+    http_response = TestClient(app).post(
+        "/process-invoice", files={"file": ("one-page.pdf", b"pdf", "application/pdf")}
+    )
+
+    assert http_response.status_code == 200
+    payload = http_response.json()
+    assert payload["document_preview"]["pages"][0]["page"] == 1
+    assert payload["expanded_fields"]["seller"]["value"] == "SUPPLIER_TEST"
+    assert len(calls) == 1
+    assert calls[0][1]["persist_erp_json"] is False
+    assert writes == ["erp", "validation"]
+
+
+def test_process_invoice_rejects_multi_logical_document_dossier(monkeypatch):
+    groups = (
+        ProcessedLogicalDocument(_group(1, (1,), "sotacib_kairouan_grey_invoice_v1"), _response("INV-TEST-001", 1)),
+        ProcessedLogicalDocument(_group(2, (2,), "ruspina_reinvoice_v1"), _response("INV-TEST-002", 2)),
+    )
+    result = DossierProcessResult(
+        source_file="two-documents.pdf", page_count=2,
+        page_classifications=tuple(item for group in groups for item in group.group.page_classifications),
+        logical_documents=groups,
+        document_preview=DocumentPreview(
+            source_file="two-documents.pdf",
+            pages=[PreviewPage(page=i, url=f"/p{i}.png", width=100, height=200) for i in (1, 2)],
+        ),
+        ocr_engine="synthetic", timings={},
+    )
+    monkeypatch.setattr(routes, "process_dossier_file", lambda *args, **kwargs: result)
+    writes = []
+    monkeypatch.setattr(routes, "write_erp_json", lambda payload: writes.append("erp"))
+    monkeypatch.setattr(routes, "write_invoice_validation_report", lambda *args: writes.append("validation"))
+
+    response = TestClient(app).post(
+        "/process-invoice", files={"file": ("two-documents.pdf", b"pdf", "application/pdf")}
+    )
+
+    assert response.status_code == 422
+    assert "use /process-dossier" in response.json()["detail"]
+    assert writes == []
 
 
 def test_simple_dossier_json_endpoint_returns_only_three_semantic_groups():

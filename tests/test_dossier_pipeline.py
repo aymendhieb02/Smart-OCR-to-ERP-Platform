@@ -272,3 +272,152 @@ def test_reordered_semantic_groups_preserve_original_physical_pages(monkeypatch,
         actual[group] = document.group.pages
 
     assert actual == expected
+
+
+def test_same_sotacib_page_has_equivalent_extraction_alone_and_in_three_page_dossier(monkeypatch, tmp_path):
+    from app.core.schemas import DocumentPreview, PreviewPage
+    from app.services.dossier_segmentation import semantic_group_for_document
+
+    def evidence(text, page, x1, y1, x2, y2, index):
+        return OCRLine(
+            text=text, confidence=0.96, page_number=page, line_index=index,
+            bbox=BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2),
+            page_width=1200, page_height=1000, source="synthetic parity fixture",
+        )
+
+    producer_lines = [
+        evidence("SOTACIB KAIROUAN", 1, 280, 20, 560, 45, 0),
+        evidence("Supplier: SUPPLIER_TEST", 1, 80, 70, 380, 92, 1),
+        evidence("Invoice Number: INV-TEST-001", 1, 80, 105, 390, 127, 2),
+        evidence("Invoice Date: 04/01/2026", 1, 80, 140, 380, 162, 3),
+        evidence("Client: CUSTOMER_TEST", 1, 80, 180, 380, 202, 4),
+        evidence("Client Address: CUSTOMER_TEST STREET", 1, 80, 210, 490, 232, 5),
+        evidence("Client tax id: TAX-TEST-001", 1, 80, 240, 390, 262, 6),
+        evidence("Consignee: RECEIVER_TEST", 1, 650, 180, 950, 202, 7),
+        evidence("Currency: EUR", 1, 80, 270, 260, 292, 8),
+        evidence("Total TTC: 1,234.00 EUR", 1, 80, 300, 420, 322, 9),
+        evidence("Description article", 1, 100, 350, 290, 372, 10),
+        evidence("Quantité (To)", 1, 400, 350, 520, 372, 11),
+        evidence("Prix unitaire EUR/To", 1, 620, 350, 830, 372, 12),
+        evidence("Montant EUR", 1, 900, 350, 1030, 372, 13),
+        evidence("CEMENT_TEST PRODUCT SAC 25KG", 1, 100, 390, 380, 412, 14),
+        evidence("12", 1, 440, 390, 475, 412, 15),
+        evidence("25,00", 1, 700, 390, 760, 412, 16),
+        evidence("300,00", 1, 930, 390, 1020, 412, 17),
+        evidence("Amount in words: ONE THOUSAND TWO HUNDRED THIRTY FOUR", 1, 80, 450, 750, 472, 18),
+        evidence("HS Code: HS-TEST-001", 1, 80, 490, 380, 512, 19),
+        evidence("Packaging: EN SAC DE 50KG", 1, 80, 530, 440, 552, 20),
+        evidence("Number of bags: 12 SACS", 1, 80, 570, 390, 592, 21),
+        evidence("Integration rate: 89%", 1, 80, 610, 360, 632, 22),
+        evidence("Incoterm: EXW", 1, 80, 650, 300, 672, 23),
+        evidence("Origin: TUNISIA", 1, 80, 690, 300, 712, 24),
+        evidence("Destination: COUNTRY_TEST", 1, 80, 730, 400, 752, 25),
+        evidence("Bank Account: RIB-TEST-001", 1, 80, 770, 420, 792, 26),
+        evidence("Payment Method: BANK TRANSFER", 1, 80, 810, 480, 832, 27),
+        evidence("Payment Terms: AT SIGHT", 1, 80, 850, 400, 872, 28),
+        evidence("Total HT", 1, 100, 900, 220, 922, 29),
+        evidence("Company RC N 987654321", 1, 700, 960, 1050, 982, 30),
+    ]
+    rus_spina_lines = [
+        OCRLine(text="RUSPINA INVOICE", confidence=0.95, page_number=2),
+        OCRLine(text="As Per Invoice INV-TEST-001", confidence=0.95, page_number=2),
+        OCRLine(text="Date 05/01/2026", confidence=0.95, page_number=2),
+        OCRLine(text="Gross Weight 1000T", confidence=0.95, page_number=2),
+        OCRLine(text="Net Weight 900T", confidence=0.95, page_number=2),
+        OCRLine(text="Number of Bags 200", confidence=0.95, page_number=2),
+    ]
+    customs_lines = [
+        OCRLine(text="TRADENET Declaration en detail", confidence=0.95, page_number=3),
+        OCRLine(text="Exporter FOREIGN_SUPPLIER_TEST", confidence=0.95, page_number=3),
+        OCRLine(text="Importer FOREIGN_CUSTOMER_TEST", confidence=0.95, page_number=3),
+    ]
+    all_lines = producer_lines + rus_spina_lines + customs_lines
+    raw_text = "\n".join(line.text for line in all_lines)
+    one_image = np.full((1000, 1200, 3), 35, dtype=np.uint8)
+    documents = {
+        "one-page.pdf": LoadedDocument(source_file="parity.pdf", extension=".pdf", images=[one_image.copy()]),
+        "three-page.pdf": LoadedDocument(
+            source_file="parity.pdf", extension=".pdf",
+            images=[one_image.copy(), np.zeros_like(one_image), np.zeros_like(one_image)],
+        ),
+    }
+    monkeypatch.setattr(
+        "app.services.pipeline_runner.load_document",
+        lambda path, *args, **kwargs: documents[path.name],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline_runner.generate_document_preview",
+        lambda document: DocumentPreview(
+            source_file=document.source_file,
+            pages=[PreviewPage(page=i, url=f"/p{i}.png", width=1200, height=1000) for i in range(1, len(document.images) + 1)],
+        ),
+    )
+
+    class SyntheticParityEngine:
+        mode = "balanced"
+        last_timings = {}
+
+        def __init__(self):
+            self.targeted_calls = []
+
+        def run(self, images, embedded_text=""):
+            lines = [line.model_copy(deep=True) for line in all_lines if line.page_number <= len(images)]
+            return OCRResult(
+                raw_text="\n".join(line.text for line in lines), lines=lines,
+                confidence=0.95, engine="synthetic", page_count=len(images),
+            )
+
+        def run_fallback_regions(self, images, region_names, *, page_numbers=None):
+            return []
+
+        def run_targeted_region(self, image, region, *, page_number):
+            self.targeted_calls.append((region.name, page_number, tuple(image.shape)))
+            return [OCRLine(
+                text="1.234,00", confidence=0.99, page_number=page_number,
+                bbox=BoundingBox(x1=850, y1=900, x2=950, y2=922),
+                page_width=1200, page_height=1000, source="regional_fallback",
+            )]
+
+    one_engine = SyntheticParityEngine()
+    three_engine = SyntheticParityEngine()
+    one = process_dossier_file(tmp_path / "one-page.pdf", ocr_engine=one_engine)
+    three = process_dossier_file(tmp_path / "three-page.pdf", ocr_engine=three_engine)
+    one_producer = one.logical_documents[0]
+    three_producer = next(item for item in three.logical_documents if item.group.document_family == "sotacib_kairouan_grey_invoice_v1")
+
+    assert one_producer.group.pages == (1,)
+    assert three_producer.group.pages == (1,)
+    assert semantic_group_for_document(one_producer.group.document_type, one_producer.group.document_family) == "page1"
+    assert one_producer.group.document_family == three_producer.group.document_family == "sotacib_kairouan_grey_invoice_v1"
+    assert {line.page_number for line in three_producer.response.all_ocr_blocks} == {1}
+    assert not any("FOREIGN_" in line.text for line in three_producer.response.all_ocr_blocks)
+
+    field_names = (
+        "seller", "invoice_number", "invoice_date", "client", "client_address", "client_tax_id",
+        "total", "total_ht", "total_amount_words", "hs_code", "packaging", "number_of_bags",
+        "integration_rate", "incoterm", "origin", "destination", "bank_account", "payment_method",
+        "payment_terms", "consignee",
+    )
+    one_fields = {name: getattr(one_producer.response.expanded_fields.get(name), "value", None) for name in field_names}
+    three_fields = {name: getattr(three_producer.response.expanded_fields.get(name), "value", None) for name in field_names}
+    assert one_fields == three_fields
+    assert one_fields["seller"] == "SOTACIB KAIROUAN"
+    assert one_fields["invoice_number"] == "INV-TEST-001"
+    assert one_fields["invoice_date"] == "04/01/2026"
+    assert one_fields["client"] == "CUSTOMER_TEST"
+    assert one_fields["total_ht"] == 1234.0
+
+    def row_snapshot(response):
+        return [
+            (item.description, item.quantity, item.unit, item.unit_price, item.line_total_ht, item.total)
+            for item in response.all_line_items
+        ]
+
+    assert row_snapshot(one_producer.response) == row_snapshot(three_producer.response)
+    assert len(row_snapshot(one_producer.response)) == 1
+    assert row_snapshot(one_producer.response)[0][:4] == ("CEMENT_TEST PRODUCT SAC 25KG", 12.0, "TO", 25.0)
+    assert one_engine.targeted_calls == three_engine.targeted_calls == [
+        ("sotacib_total_ht_value_cell", 1, (1000, 1200, 3))
+    ]
+    assert one_producer.response.extraction_debug["sotacib_total_ht_fallback"]["reason"] == "regional_value_recovered"
+    assert three_producer.response.extraction_debug["sotacib_total_ht_fallback"]["reason"] == "regional_value_recovered"
