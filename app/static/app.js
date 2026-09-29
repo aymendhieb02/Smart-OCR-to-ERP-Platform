@@ -348,6 +348,31 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
   });
 });
 
+document.getElementById("copySimpleDossierJsonBtn")?.addEventListener("click", () => copySimpleDossierJson());
+
+async function copySimpleDossierJson() {
+  if (!dossierResponse) return;
+  const logicalDocument = getSelectedLogicalDocument();
+  if (logicalDocument && lastResponse) logicalDocument.response = lastResponse;
+  const button = document.getElementById("copySimpleDossierJsonBtn");
+  try {
+    const response = await fetch("/export-simple-dossier-json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dossierResponse),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || t("dossier.simple_json_failed"));
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    if (button) {
+      button.textContent = t("dossier.simple_json_copied");
+      setTimeout(() => { button.textContent = t("dossier.copy_simple_json"); }, 1200);
+    }
+  } catch (error) {
+    showError(error.message || t("dossier.simple_json_failed"));
+  }
+}
+
 async function checkApi() {
   try {
     const response = await fetch("/health");
@@ -512,6 +537,8 @@ function summarizeLogicalDocuments(documents = dossierResponse?.logical_document
 
 function renderDossierNavigation() {
   if (!dossierResponse) return;
+  const copySimpleJsonButton = document.getElementById("copySimpleDossierJsonBtn");
+  if (copySimpleJsonButton) copySimpleJsonButton.disabled = false;
   const title = document.getElementById("dossierTitle");
   const counts = document.getElementById("dossierCounts");
   const summaryHost = document.getElementById("dossierSummary");
@@ -534,6 +561,7 @@ function renderDossierNavigation() {
     button.className = `logical-document-tab${index === selectedLogicalDocumentIndex ? " active" : ""}`;
     button.id = `logical-document-tab-${index}`;
     button.dataset.logicalDocumentIndex = String(index);
+    if (logicalDocument.semantic_group) button.dataset.semanticGroup = logicalDocument.semantic_group;
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(index === selectedLogicalDocumentIndex));
     button.setAttribute("aria-controls", "logicalDocumentPanel");

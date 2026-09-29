@@ -15,10 +15,12 @@ from app.core.schemas import (
     DossierPageClassification,
     DossierReviewSummary,
     DossierReconciliationSubmission,
+    SimpleDossierInput,
     ProcessDossierResponse,
     ProcessInvoiceResponse,
     ReviewCorrectionResponse,
     ReviewCorrectionSubmission,
+    SimpleDossierOutput,
 )
 from app.services.correction_store import submit_corrections, validate_review_corrections
 from app.services.correction_identity import correction_document_id
@@ -27,6 +29,8 @@ from app.services.erp_mapper import map_to_flat_erp
 from app.services.file_loader import save_upload_to_temp
 from app.services.ocr_engine import OCREngine
 from app.services.pipeline_runner import process_document_file, process_dossier_file
+from app.services.dossier_segmentation import semantic_group_for_document
+from app.services.simple_dossier_json import build_simple_dossier_output
 
 router = APIRouter()
 ocr_engine = OCREngine()
@@ -93,8 +97,23 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
                 document_index=index,
                 document_type=item.group.document_type,
                 document_family=item.group.document_family,
+                semantic_group=semantic_group_for_document(
+                    item.group.document_type,
+                    item.group.document_family,
+                    tuple(anchor for classification in item.group.page_classifications for anchor in classification.matched_anchors),
+                ),
                 physical_page_numbers=list(item.group.pages),
-                page_classifications=[DossierPageClassification(**classification.__dict__) for classification in item.group.page_classifications],
+                page_classifications=[
+                    DossierPageClassification(
+                        **classification.__dict__,
+                        semantic_group=semantic_group_for_document(
+                            classification.document_type,
+                            classification.document_family,
+                            classification.matched_anchors,
+                        ),
+                    )
+                    for classification in item.group.page_classifications
+                ],
                 response=item.response,
             )
             for index, item in enumerate(result.logical_documents, start=1)
@@ -116,7 +135,17 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
                 invalid_count=invalid_count,
             ),
             document_preview=result.document_preview,
-            page_classifications=[DossierPageClassification(**classification.__dict__) for classification in result.page_classifications],
+            page_classifications=[
+                DossierPageClassification(
+                    **classification.__dict__,
+                    semantic_group=semantic_group_for_document(
+                        classification.document_type,
+                        classification.document_family,
+                        classification.matched_anchors,
+                    ),
+                )
+                for classification in result.page_classifications
+            ],
             logical_documents=documents,
             relationships=list(result.relationships),
             ocr_engine=result.ocr_engine,
@@ -131,6 +160,12 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+@router.post("/export-simple-dossier-json", response_model=SimpleDossierOutput)
+async def export_simple_dossier_json(payload: SimpleDossierInput) -> SimpleDossierOutput:
+    """Serialize the current dossier review payload without changing ERP export."""
+    return build_simple_dossier_output(payload)
 
 
 @router.get("/demo-documents")

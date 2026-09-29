@@ -53,6 +53,15 @@ def test_presentation_resolver_centralizes_document_behavior():
     assert 'showLineItems: false' in APP_JS
 
 
+def test_adaptive_dossier_tabs_follow_only_detected_logical_documents():
+    navigation = APP_JS[APP_JS.index("function renderDossierNavigation"):APP_JS.index("function handleDocumentTabKeydown")]
+    assert '(dossierResponse.logical_documents || []).forEach((logicalDocument, index) =>' in navigation
+    assert 'button.dataset.semanticGroup = logicalDocument.semantic_group' in navigation
+    assert 'button.addEventListener("click", () => selectLogicalDocument(index))' in navigation
+    assert "Page 2 missing" not in APP_JS
+    assert "No customs document" not in APP_JS
+
+
 def test_corrections_use_logical_document_identity_and_customs_is_display_only():
     assert "logicalDocument?.logical_document_id" in APP_JS
     assert 'if (!resolveDocumentPresentation().allowCorrections)' in APP_JS
