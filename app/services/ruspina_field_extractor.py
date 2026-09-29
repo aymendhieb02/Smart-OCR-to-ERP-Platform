@@ -7,6 +7,7 @@ import re
 
 from app.core.schemas import BoundingBox, FieldExtractionDetail, LineItem, OCRLine
 from app.utils.helpers import parse_amount, strip_accents
+from app.services.table_regions import build_label_value_region
 
 
 FAMILY = "ruspina_reinvoice_v1"
@@ -24,6 +25,56 @@ _MONEY = re.compile(r"^\s*\d[\d\s.,]*\s*(?:EUR|EURO|E0R|UR)?\s*$", re.IGNORECASE
 class RuspinaExtraction:
     fields: dict[str, FieldExtractionDetail]
     line_items: list[LineItem]
+
+
+def recover_ruspina_net_weight(
+    lines: list[OCRLine],
+    images: list,
+    ocr_engine,
+    *,
+    physical_page_numbers: tuple[int, ...] | list[int] | None = None,
+) -> tuple[list[OCRLine], dict]:
+    """Use a label-relative crop only when a RUSPINA page's net-weight value is absent."""
+    debug = {"attempted": False, "reason": "net_weight_present_in_existing_ocr", "pages": [], "added_lines": 0}
+    if not images or not callable(getattr(ocr_engine, "run_targeted_region", None)):
+        debug["reason"] = "targeted_ocr_unavailable"
+        return [], debug
+
+    page_numbers = tuple(physical_page_numbers or range(1, len(images) + 1))
+    labels_by_page: dict[int, OCRLine] = {}
+    for line in lines:
+        if (line.bbox and re.match(r"^net\s*weight\b", _plain(line.text))
+                and line.page_number not in labels_by_page):
+            labels_by_page[line.page_number] = line
+    selected = []
+    for page_number, label in labels_by_page.items():
+        page_lines = [line for line in lines if line.page_number == page_number]
+        if extract_ruspina_fields(page_lines, document_family=FAMILY).fields.get("net_weight"):
+            continue
+        try:
+            image_index = page_numbers.index(page_number)
+        except ValueError:
+            continue
+        if image_index >= len(images):
+            continue
+        region = build_label_value_region(
+            images[image_index], label.bbox, name="ruspina_net_weight",
+            page_width=label.page_width, page_height=label.page_height,
+        )
+        if region is not None:
+            selected.append((image_index, page_number, region))
+    if not selected:
+        debug["reason"] = "label_value_not_missing_or_label_geometry_unavailable"
+        return [], debug
+
+    recovered = []
+    for image_index, page_number, region in selected:
+        debug["attempted"] = True
+        debug["pages"].append(page_number)
+        recovered.extend(ocr_engine.run_targeted_region(images[image_index], region, page_number=page_number) or [])
+    debug["added_lines"] = len(recovered)
+    debug["reason"] = "regional_ocr_added_evidence" if recovered else "regional_ocr_returned_no_lines"
+    return recovered, debug
 
 
 def extract_ruspina_fields(
@@ -149,8 +200,11 @@ def _extract_page(lines: list[OCRLine], width: int, height: int) -> dict[str, Fi
         ("swift", r"^swift\s*[:;]?\s*$", _swift_value),
     )
     for name, pattern, parser in logistics:
+        is_weight = name in {"gross_weight", "net_weight"}
         pair = _labelled_value(lines, width, height, pattern, (0.0, 0.59, 0.25, 0.85), parser,
-                               max_x=0.58, max_gap_y=0.014)
+                               max_x=0.58, max_gap_y=0.025 if is_weight else 0.014,
+                               prefer_at_or_below=is_weight,
+                               exclude_row_labels=(r"^number\s*of\s*bags\b",) if name == "net_weight" else ())
         if not pair:
             continue
         label, value_line = pair
@@ -182,7 +236,7 @@ def _extract_table(lines: list[OCRLine], width: int, height: int) -> tuple[list[
     items: list[LineItem] = []
     item_evidence: list[OCRLine] = []
     first_row_fields: dict[str, FieldExtractionDetail] = {}
-    quantity_header = next((line for line in headings if 0.52 <= _cx(line, width) <= 0.66
+    quantity_header = next((line for line in lines if _in_region(line, width, height, (0.50, 0.21, 0.68, 0.28))
                             and re.search(r"[({\[]\s*T\s*[)}\]]?", line.text, re.IGNORECASE)), None)
     for row in rows:
         row_y = _cy(row[0], height)
@@ -235,26 +289,49 @@ def _table_number(lines: list[OCRLine], width: int, height: int, row_y: float,
 
 def _labelled_value(lines: list[OCRLine], width: int, height: int, pattern: str,
                     region: tuple[float, float, float, float], parser,
-                    *, max_x: float, max_gap_y: float) -> tuple[OCRLine, OCRLine] | None:
+                    *, max_x: float, max_gap_y: float,
+                    prefer_at_or_below: bool = False,
+                    exclude_row_labels: tuple[str, ...] = ()) -> tuple[OCRLine, OCRLine] | None:
     labels = [line for line in lines if _in_region(line, width, height, region)
               and re.search(pattern, _plain(line.text))]
     pairs = [(label, value) for label in labels
              if (value := _right_value(label, lines, width, height, lambda line: parser(line) is not None,
-                                       max_x=max_x, max_gap_y=max_gap_y))]
+                                       max_x=max_x, max_gap_y=max_gap_y,
+                                       prefer_at_or_below=prefer_at_or_below,
+                                       exclude_row_labels=exclude_row_labels))]
     return max(pairs, key=lambda pair: min(pair[0].confidence or 0, pair[1].confidence or 0)) if pairs else None
 
 
 def _right_value(label: OCRLine, lines: list[OCRLine], width: int, height: int, predicate,
-                 *, max_x: float, max_gap_y: float = 0.014) -> OCRLine | None:
+                 *, max_x: float, max_gap_y: float = 0.014,
+                 prefer_at_or_below: bool = False,
+                 exclude_row_labels: tuple[str, ...] = ()) -> OCRLine | None:
     candidates = [line for line in lines if line is not label and line.bbox
                   and line.page_number == label.page_number
                   and line.bbox.x1 >= label.bbox.x2 - width * 0.04
                   and _cx(line, width) <= max_x
                   and abs(_cy(line, height) - _cy(label, height)) <= max_gap_y
+                  and (not prefer_at_or_below or _cy(line, height) >= _cy(label, height) - 0.004)
+                  and not any(
+                      other is not label and other is not line and other.page_number == label.page_number
+                      and other.bbox and _cx(other, width) <= _cx(line, width)
+                      and abs(_cy(other, height) - _cy(line, height)) <= 0.010
+                      and any(re.search(other_pattern, _plain(other.text)) for other_pattern in exclude_row_labels)
+                      for other in lines
+                  )
                   and predicate(line)]
-    return min(candidates, key=lambda line: (abs(_cy(line, height) - _cy(label, height)),
-                                         max(0, line.bbox.x1 - label.bbox.x2) / width,
-                                         -(line.confidence or 0))) if candidates else None
+    def score(line: OCRLine) -> tuple[float, float, float]:
+        delta_y = _cy(line, height) - _cy(label, height)
+        vertical_gap = abs(delta_y)
+        if prefer_at_or_below and delta_y < -0.004:
+            vertical_gap += max_gap_y
+        return (
+            vertical_gap,
+            max(0, line.bbox.x1 - label.bbox.x2) / width,
+            -(line.confidence or 0),
+        )
+
+    return min(candidates, key=score) if candidates else None
 
 
 def _seller_line(lines: list[OCRLine], width: int, height: int) -> OCRLine | None:
@@ -347,7 +424,7 @@ def _detail(value, width: int, height: int, *observations: OCRLine, display_valu
     observations = tuple({id(line): line for line in observations}.values())
     first = observations[0]
     return FieldExtractionDetail(
-        value=value, display_value=display_value, normalized_value=value,
+        value=value, display_value=display_value, machine_value=value, normalized_value=value,
         evidence_text="\n".join(line.text for line in observations),
         confidence=round(min(line.confidence or 0 for line in observations), 3),
         bbox=_union_box(observations), page=first.page_number,

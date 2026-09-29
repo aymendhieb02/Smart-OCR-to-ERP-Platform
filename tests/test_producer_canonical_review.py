@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.core.schemas import ExtractedInvoiceFields, FieldExtractionDetail, LineItem, ReviewCorrectionSubmission
+from app.core.schemas import BoundingBox, ExtractedInvoiceFields, FieldExtractionDetail, LineItem, OCRLine, ReviewCorrectionSubmission
 from app.services import correction_store
 from app.services.pipeline_runner import _apply_family_review_corrections, _apply_producer_line_item_corrections
 from app.services.producer_invoice_review import (
@@ -10,6 +10,7 @@ from app.services.producer_invoice_review import (
     apply_producer_review_fields,
     merge_producer_semantics,
     prepare_producer_fields,
+    recover_enfidha_proforma_reference,
 )
 
 
@@ -157,6 +158,53 @@ def test_labeled_ocr_exposes_source_faithful_packaging_and_distinct_sotacib_fiel
     assert response.expanded_fields["payment_terms"].value == "30 jours"
 
 
+def test_total_amount_words_prefers_horizontally_aligned_value_over_far_right_neighbor():
+    label = OCRLine(
+        text="La somme de:", confidence=0.92, page_number=1, line_index=1,
+        bbox=BoundingBox(x1=172, y1=611, x2=559, y2=635),
+        source="synthetic fixture",
+    )
+    expected = OCRLine(
+        text="ONE THOUSAND TEST EUROS", confidence=0.94, page_number=1, line_index=2,
+        bbox=BoundingBox(x1=167, y1=644, x2=572, y2=667),
+        source="synthetic fixture",
+    )
+    unrelated_far_right = OCRLine(
+        text="123.00", confidence=0.98, page_number=1, line_index=3,
+        bbox=BoundingBox(x1=1005, y1=636, x2=1093, y2=657),
+        source="synthetic regional fallback",
+    )
+
+    fields = prepare_producer_fields(
+        ExtractedInvoiceFields(), [label, expected, unrelated_far_right], next(iter(SOTACIB_FAMILIES)),
+    )
+
+    assert fields["total_amount_words"].value == expected.text
+    assert fields["total_amount_words"].line_index == expected.line_index
+    assert fields["total_amount_words"].bbox.x1 == expected.bbox.x1
+
+
+def test_sotacib_french_destination_phrase_uses_positioned_evidence():
+    unpositioned = OCRLine(
+        text="Marchandise Destinee a l'exportation vers OTHER_TEST", confidence=0.9,
+        page_number=1, line_index=1, source="synthetic embedded text",
+    )
+    positioned = OCRLine(
+        text="Marchandlse Destlnee a I'exportation vers COUNTRY_TEST", confidence=0.94,
+        page_number=1, line_index=2,
+        bbox=BoundingBox(x1=100, y1=300, x2=620, y2=322),
+        source="synthetic positioned OCR",
+    )
+
+    fields = prepare_producer_fields(
+        ExtractedInvoiceFields(), [unpositioned, positioned], next(iter(SOTACIB_FAMILIES)),
+    )
+
+    assert fields["destination"].value == "COUNTRY_TEST"
+    assert fields["destination"].line_index == positioned.line_index
+    assert fields["destination"].bbox.x1 == positioned.bbox.x1
+
+
 def test_enfidha_bulk_exposes_truck_count_without_bag_only_values():
     lines = [
         SimpleNamespace(text="PACKING: BULK", confidence=0.9, page_number=1, bbox=None),
@@ -181,6 +229,126 @@ def test_generic_bag_quantity_and_weight_keep_numeric_values_and_source_display(
     assert fields["number_of_bags"].display_value == "20000 Bags"
     assert fields["bag_weight"].value == "50"
     assert fields["bag_weight"].display_value == "50 kgs"
+
+
+def test_enfidha_conform_to_proforma_row_exposes_number_and_canonical_date():
+    line = SimpleNamespace(
+        text="Conform to the proforma invoice N° PF-TEST-023 DU 04/01/2026",
+        confidence=0.93, page_number=1,
+    )
+
+    fields = prepare_producer_fields(ExtractedInvoiceFields(), [line], ENFIDHA_FAMILY)
+
+    assert fields["proforma_invoice_number"].value == "PF-TEST-023"
+    assert fields["proforma_invoice_number"].evidence_text == line.text
+    assert fields["proforma_invoice_date"].value == "2026-01-04"
+    assert fields["proforma_invoice_date"].display_value == "04/01/2026"
+    assert fields["proforma_invoice_date"].machine_value == "04/01/2026"
+
+
+def test_enfidha_split_proforma_reference_uses_label_row_and_one_targeted_date_crop():
+    import numpy as np
+
+    def line(text, x, y):
+        cx, cy = x * 1000, y * 1400
+        return OCRLine(
+            text=text, confidence=0.91, page_number=1,
+            bbox=BoundingBox(x1=cx - 50, y1=cy - 10, x2=cx + 50, y2=cy + 10),
+            page_width=1000, page_height=1400, coordinate_space="original_page",
+        )
+
+    label = line("Conform to the proforma invoice N°", 0.40, 0.55)
+    number = line("02-23", 0.57, 0.55)
+    marker = line("DU", 0.65, 0.55)
+    date_line = line("04/01/2026", 0.76, 0.55)
+    existing = [label, number, marker]
+
+    class Engine:
+        calls = []
+
+        def run_targeted_region(self, image, region, *, page_number):
+            self.calls.append((region.name, page_number, tuple(region.image.shape[:2])))
+            return [date_line]
+
+    engine = Engine()
+    fields, targeted, debug = recover_enfidha_proforma_reference(
+        existing, ENFIDHA_FAMILY, [np.zeros((1400, 1000, 3), dtype=np.uint8)], engine,
+        physical_page_numbers=(1,),
+    )
+
+    assert fields["proforma_invoice_number"].value == "02-23"
+    assert fields["proforma_invoice_number"].evidence_text == f"{label.text}\n{number.text}"
+    assert fields["proforma_invoice_date"].value == "2026-01-04"
+    assert fields["proforma_invoice_date"].machine_value == "04/01/2026"
+    assert targeted == [date_line]
+    assert engine.calls[0][:2] == ("producer_proforma_reference", 1)
+    assert debug["reason"] == "reference_recovered"
+
+
+def test_enfidha_split_proforma_reference_does_not_borrow_the_main_invoice_date():
+    def line(text, x, y):
+        cx, cy = x * 1000, y * 1400
+        return OCRLine(
+            text=text, confidence=0.91, page_number=1,
+            bbox=BoundingBox(x1=cx - 50, y1=cy - 10, x2=cx + 50, y2=cy + 10),
+            page_width=1000, page_height=1400, coordinate_space="original_page",
+        )
+
+    lines = [
+        line("Date 04/01/2026", 0.80, 0.22),
+        line("Conform to the proforma invoice N°", 0.40, 0.55),
+        line("02-23", 0.57, 0.55),
+        line("DU", 0.65, 0.55),
+    ]
+    fields, targeted, debug = recover_enfidha_proforma_reference(
+        lines, ENFIDHA_FAMILY, [], None,
+    )
+
+    assert fields["proforma_invoice_number"].value == "02-23"
+    assert "proforma_invoice_date" not in fields
+    assert targeted == []
+    assert debug["reason"] == "targeted_ocr_unavailable"
+
+
+def test_payment_transcription_normalization_preserves_raw_ocr_evidence():
+    line = SimpleNamespace(
+        text="PAYMENT: BANKTYRANSFER IN 30 DAYS", confidence=0.91, page_number=1,
+    )
+
+    fields = prepare_producer_fields(ExtractedInvoiceFields(), [line], ENFIDHA_FAMILY)
+
+    assert fields["payment"].value == "BANK TRANSFER IN 30 DAYS"
+    assert fields["payment"].display_value == "BANK TRANSFER IN 30 DAYS"
+    assert fields["payment"].machine_value == "BANKTYRANSFER IN 30 DAYS"
+    assert fields["payment"].evidence_text == "PAYMENT: BANKTYRANSFER IN 30 DAYS"
+
+
+def test_producer_party_geometry_keeps_seller_client_address_and_consignee_distinct():
+    def line(text, x, y, *, width=1000, height=1400):
+        return OCRLine(
+            text=text, confidence=0.93, page_number=1,
+            bbox=BoundingBox(x1=x, y1=y, x2=x + 220, y2=y + 24),
+            page_width=width, page_height=height, coordinate_space="original_page",
+        )
+
+    lines = [
+        line("SUPPLIER_TEST INDUSTRIES", 600, 100),
+        line("IMPORTER_CUSTOMER_TEST LLC", 260, 430),
+        line("ADDRESS: CUSTOMER_TEST CITY", 260, 470),
+        line("RC N°: RC-TEST-023", 260, 510),
+        line("CONSIGNEE: RECEIVER_TEST", 360, 560),
+        line("ADDRESS: RECEIVER_TEST CITY", 260, 600),
+    ]
+
+    fields = prepare_producer_fields(ExtractedInvoiceFields(), lines, ENFIDHA_FAMILY)
+
+    assert fields["seller"].value == "SUPPLIER_TEST INDUSTRIES"
+    assert fields["client"].value == "IMPORTER_CUSTOMER_TEST LLC"
+    assert fields["client_address"].value == "CUSTOMER_TEST CITY"
+    assert fields["consignee"].value == "RECEIVER_TEST"
+    assert fields["consignee_address"].value == "RECEIVER_TEST CITY"
+    assert fields["client"].value != fields["seller"].value
+    assert fields["client_address"].value != fields["consignee_address"].value
 
 
 def test_producer_field_correction_uses_existing_store_and_preserves_machine_evidence(tmp_path, monkeypatch):

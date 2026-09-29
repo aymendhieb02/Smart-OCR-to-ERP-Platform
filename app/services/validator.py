@@ -16,6 +16,8 @@ def validate_invoice(
     producer_invoice: bool = False,
     producer_total: float | None = None,
     producer_tax_applicable: bool = False,
+    ruspina_invoice: bool = False,
+    ruspina_total: float | None = None,
 ) -> ValidationResult:
     if isinstance(document_type, DocumentClassification):
         document_type = document_type.document_type
@@ -26,7 +28,7 @@ def validate_invoice(
     if document_type == "unknown":
         warnings.append("Document type is unknown")
 
-    if document_type in {"invoice", "credit_note", "delivery_note"} and not fields.invoice_number:
+    if (document_type in {"invoice", "credit_note", "delivery_note"} or ruspina_invoice) and not fields.invoice_number:
         warnings.append("Document reference is missing")
     if not fields.invoice_date:
         warnings.append("Document date is missing or invalid")
@@ -38,13 +40,18 @@ def validate_invoice(
             warnings.append("Producer invoice total is missing")
         elif producer_total <= 0:
             errors.append("Producer invoice total must be positive")
+    elif ruspina_invoice:
+        if ruspina_total is None:
+            warnings.append("RUSPINA invoice total is missing")
+        elif ruspina_total <= 0:
+            errors.append("RUSPINA invoice total must be positive")
     elif document_type in {"invoice", "credit_note", "receipt"}:
         if fields.amount_ttc is None:
             warnings.append("Total amount TTC is missing")
         elif document_type != "credit_note" and fields.amount_ttc <= 0:
             errors.append("Total amount TTC must be positive")
 
-    if fields.amount_ht is not None and fields.tva_amount is not None and fields.amount_ttc is not None:
+    if not ruspina_invoice and fields.amount_ht is not None and fields.tva_amount is not None and fields.amount_ttc is not None:
         expected = round(fields.amount_ht + fields.tva_amount, 3)
         mismatch = abs(expected - fields.amount_ttc)
         if mismatch > max(0.05, abs(fields.amount_ttc) * 0.001):
@@ -55,10 +62,14 @@ def validate_invoice(
             warnings.append(f"Small amount rounding difference: HT + TVA = {expected}, TTC = {fields.amount_ttc}")
     elif producer_invoice and producer_total is not None:
         pass
+    elif ruspina_invoice and ruspina_total is not None:
+        pass
     elif document_type == "invoice":
         warnings.append("Insufficient semantically valid totals for complete financial consistency check" if producer_invoice else "One or more amount fields are missing, total consistency could not be fully checked")
 
     if producer_invoice and not producer_tax_applicable:
+        pass
+    elif ruspina_invoice:
         pass
     elif document_type == "invoice" and fields.tax_rate is None:
         warnings.append("Tax rate is missing")

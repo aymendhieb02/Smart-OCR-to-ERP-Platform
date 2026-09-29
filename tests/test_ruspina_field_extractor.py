@@ -179,10 +179,35 @@ def test_equal_gross_and_net_are_still_sourced_from_distinct_lines():
     assert result.fields["gross_weight"].bbox != result.fields["net_weight"].bbox
 
 
+def test_net_weight_label_can_pair_with_its_lower_right_value_without_crossing_rows():
+    lines = _form()
+    net_label = next(line for line in lines if line.text == "NET WEIGHT:")
+    net_label.bbox.y1 = 0.678 * net_label.page_height
+    net_label.bbox.y2 = net_label.bbox.y1 + 20
+    net_value = next(line for line in lines if line.text == "240T")
+    net_value.bbox.y1 = 0.700 * net_value.page_height
+    net_value.bbox.y2 = net_value.bbox.y1 + 20
+    for text in ("NUMBER OF BAGS:", "5 000"):
+        bag_line = next(line for line in lines if line.text == text)
+        bag_line.bbox.y1 = 0.716 * bag_line.page_height
+        bag_line.bbox.y2 = bag_line.bbox.y1 + 20
+
+    result = _extract(lines)
+
+    assert result.fields["gross_weight"].value == 250.0
+    assert result.fields["net_weight"].value == 240.0
+    assert result.fields["gross_weight"].bbox != result.fields["net_weight"].bbox
+
+
 def test_absent_net_and_noninteger_bag_reading_remain_null():
     lines = [line for line in _form() if line.text != "240T"]
+    bag_label = next(line for line in lines if line.text == "NUMBER OF BAGS:")
+    bag_label.bbox.y1 = 0.716 * bag_label.page_height
+    bag_label.bbox.y2 = bag_label.bbox.y1 + 20
     bags = next(line for line in lines if line.text == "5 000")
     bags.text = "5000.400"
+    bags.bbox.y1 = 0.716 * bags.page_height
+    bags.bbox.y2 = bags.bbox.y1 + 20
     result = _extract(lines)
     assert "net_weight" not in result.fields
     assert "number_of_bags" not in result.fields
@@ -241,6 +266,16 @@ def test_unit_is_not_guessed_when_quantity_header_and_row_lack_it():
     result = _extract(_form(quantity_header="Quantity ("))
     assert result.line_items[0].unit is None
     assert "unit" not in result.fields
+
+
+def test_unit_is_extracted_from_a_standalone_quantity_header_marker():
+    lines = _form(quantity_header="Quantity")
+    lines.append(_line("(T)", 0.61, 0.255, box_width=30))
+
+    result = _extract(lines)
+
+    assert result.line_items[0].unit == "T"
+    assert result.fields["unit"].evidence_text == "(T)"
 
 
 def test_printed_line_total_is_not_replaced_by_arithmetic_or_footer_total():
@@ -324,3 +359,78 @@ def test_dossier_pipeline_scopes_ruspina_fields_to_its_logical_document(monkeypa
     assert saved["parties"]["buyer"] == "BETA CUSTOMER LLC"
     assert saved["financial"]["total"] == 12500.0
     assert saved["line_items"][0]["quantity"] == 250.0
+
+
+def test_dossier_pipeline_targets_ruspina_quantity_header_only_when_unit_is_missing(monkeypatch, tmp_path):
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(b"synthetic test fixture")
+    images = [np.zeros((1684, 1190, 3), dtype=np.uint8) for _ in range(2)]
+    monkeypatch.setattr("app.services.pipeline_runner.load_document", lambda *args, **kwargs: LoadedDocument(
+        source_file=source.name, extension=".pdf", images=images,
+    ))
+
+    class Engine:
+        mode = "fast"
+        last_timings = {"total_paddle_calls": 1}
+
+        def __init__(self):
+            self.run_calls = 0
+            self.region_calls = []
+
+        def run(self, _images, _embedded_text=""):
+            self.run_calls += 1
+            lines = [_line("PRODUCER TEST FACTURE", 0.3, 0.1, page=1), *_form(quantity_header="Quantity")]
+            return OCRResult(raw_text="\n".join(line.text for line in lines), lines=lines,
+                             confidence=0.9, engine="synthetic", page_count=2)
+
+        def run_fallback_regions(self, _images, names, *, page_numbers=None):
+            self.region_calls.append((tuple(names), tuple(page_numbers or ())))
+            return [_line("Quantity (T)", 0.57, 0.255, page=page_numbers[0], source="regional_fallback")]
+
+    engine = Engine()
+    result = process_dossier_file(source, ocr_engine=engine)
+    ruspina_doc = next(item for item in result.logical_documents if item.group.document_family == "ruspina_reinvoice_v1")
+
+    assert engine.run_calls == 1
+    assert engine.region_calls == [(("ruspina_table_header_unit",), (2,))]
+    assert ruspina_doc.response.all_line_items[0].unit == "T"
+    assert ruspina_doc.response.extraction_debug["ruspina_field_extraction"]["unit_header_recovery"] == {
+        "attempted": True, "pages": [2], "added_lines": 1,
+    }
+
+
+def test_dossier_pipeline_targets_net_weight_only_when_its_label_has_no_row_value(monkeypatch, tmp_path):
+    source = tmp_path / "synthetic.pdf"
+    source.write_bytes(b"synthetic test fixture")
+    images = [np.zeros((1684, 1190, 3), dtype=np.uint8) for _ in range(2)]
+    monkeypatch.setattr("app.services.pipeline_runner.load_document", lambda *args, **kwargs: LoadedDocument(
+        source_file=source.name, extension=".pdf", images=images,
+    ))
+
+    class Engine:
+        mode = "fast"
+        last_timings = {"total_paddle_calls": 1}
+
+        def __init__(self):
+            self.run_calls = 0
+            self.targeted_calls = []
+
+        def run(self, _images, _embedded_text=""):
+            self.run_calls += 1
+            lines = [_line("PRODUCER TEST FACTURE", 0.3, 0.1, page=1)]
+            lines.extend(line for line in _form() if line.text != "240T")
+            return OCRResult(raw_text="\n".join(line.text for line in lines), lines=lines,
+                             confidence=0.9, engine="synthetic", page_count=2)
+
+        def run_targeted_region(self, _image, region, *, page_number):
+            self.targeted_calls.append((region.name, page_number))
+            return [_line("240T", 0.31, 0.68, page=page_number, source="regional_fallback")]
+
+    engine = Engine()
+    result = process_dossier_file(source, ocr_engine=engine)
+    ruspina_doc = next(item for item in result.logical_documents if item.group.document_family == "ruspina_reinvoice_v1")
+
+    assert engine.run_calls == 1
+    assert engine.targeted_calls == [("ruspina_net_weight", 2)]
+    assert ruspina_doc.response.expanded_fields["net_weight"].value == 240.0
+    assert ruspina_doc.response.extraction_debug["ruspina_field_extraction"]["net_weight_recovery"]["attempted"]

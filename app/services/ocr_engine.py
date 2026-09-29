@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.schemas import BoundingBox, OCRLine, OCRResult
 from app.services.ocr_profiles import effective_ocr_config, ocr_configuration_hash
 from app.services.preprocessing import preprocess_image, preprocess_table_region
-from app.services.table_regions import OCRRegion, build_ocr_regions, build_tradenet_ocr_regions
+from app.services.table_regions import OCRRegion, build_ocr_regions, build_ruspina_ocr_regions, build_tradenet_ocr_regions
 from app.utils.helpers import normalize_text
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,8 @@ class OCREngine:
             regions = build_ocr_regions(image)
             if any(name.startswith("tradenet_") for name in requested):
                 regions.extend(build_tradenet_ocr_regions(image))
+            if any(name.startswith("ruspina_") for name in requested):
+                regions.extend(build_ruspina_ocr_regions(image))
             for region in regions:
                 if region.name == "full_page" or region.name not in requested:
                     continue
@@ -400,7 +402,7 @@ def _preprocess_for_region(region: OCRRegion) -> np.ndarray:
     max_side = ocr_config["input_max_side"]
     if region.name == "full_page":
         processed = preprocess_image(region.image, profile=profile, max_side=max_side)
-    elif region.name.startswith("tradenet_"):
+    elif region.name.startswith(("tradenet_", "ruspina_", "producer_")):
         # Small printed cells lose thin strokes under the generic table
         # thresholding pass; preserve their original scan tones.
         processed = preprocess_table_region(region.image, profile="direct", max_side=None)
@@ -629,7 +631,7 @@ def _tesseract_string_lines(pytesseract, image: np.ndarray, page_number: int, co
 
 def _dedupe_ocr_lines(lines: list[OCRLine]) -> list[OCRLine]:
     unique: list[OCRLine] = []
-    seen: set[tuple[int, str]] = set()
+    positions: dict[tuple[int, str], int] = {}
     for line in lines:
         normalized = normalize_text(line.text).lower()
         if not normalized:
@@ -637,10 +639,18 @@ def _dedupe_ocr_lines(lines: list[OCRLine]) -> list[OCRLine]:
         # Keep repeated labels/values on different physical pages. A dossier
         # must retain the same per-page OCR evidence as a standalone upload.
         key = (line.page_number, normalized)
-        if key in seen:
+        existing_index = positions.get(key)
+        if existing_index is None:
+            positions[key] = len(unique)
+            unique.append(line)
             continue
-        seen.add(key)
-        unique.append(line)
+        # PDFs may contain a text layer as well as scanned-page OCR. The text
+        # layer is added first and has no geometry; prefer the duplicate
+        # positioned OCR line so downstream layout and table extraction can
+        # associate the same text with its page location.
+        existing = unique[existing_index]
+        if existing.bbox is None and line.bbox is not None:
+            unique[existing_index] = line
     return unique
 
 

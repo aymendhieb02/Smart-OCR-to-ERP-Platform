@@ -70,6 +70,11 @@ def build_tradenet_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     ]
 
 
+def build_ruspina_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
+    """Small direct-tone crop for the quantity unit in RUSPINA table headers."""
+    return [_region(image, "ruspina_table_header_unit", 0.48, 0.22, 0.67, 0.30)]
+
+
 def _region(image: np.ndarray, name: str, x1: float, y1: float, x2: float, y2: float) -> OCRRegion:
     h, w = image.shape[:2]
     left = max(0, min(w - 1, int(w * x1)))

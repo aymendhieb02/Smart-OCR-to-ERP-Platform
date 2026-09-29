@@ -12,6 +12,8 @@ def reason_financials(
     *,
     producer_invoice: bool = False,
     producer_total: float | None = None,
+    ruspina_invoice: bool = False,
+    ruspina_total: float | None = None,
     shipping: float | None = None,
     discount: float | None = None,
     stamp_tax: float | None = None,
@@ -32,7 +34,7 @@ def reason_financials(
         stamp_tax=stamp_tax,
         tolerance=tolerance,
     )
-    if fields.amount_ht is not None and fields.tva_amount is not None and fields.amount_ttc is not None:
+    if not ruspina_invoice and fields.amount_ht is not None and fields.tva_amount is not None and fields.amount_ttc is not None:
         expected = round(fields.amount_ht + fields.tva_amount + shipping + stamp_tax - discount, 3)
         delta = round(abs(expected - fields.amount_ttc), 3)
         checks["ht_vat_adjustments_to_ttc"] = {
@@ -45,23 +47,26 @@ def reason_financials(
         if not checks["ht_vat_adjustments_to_ttc"]["passed"]:
             errors.append(f"HT + VAT + shipping + stamp tax - discount = {expected}, TTC = {fields.amount_ttc}")
         checks["ht_vat_shipping_discount_to_ttc"] = checks["ht_vat_adjustments_to_ttc"]
-    elif not (producer_invoice and producer_total is not None):
+    elif not ((producer_invoice and producer_total is not None) or (ruspina_invoice and ruspina_total is not None)):
         warnings.append("insufficient totals for complete financial check")
 
     line_totals = [item.line_total_ht if item.line_total_ht is not None else item.total for item in line_items]
     line_totals = [value for value in line_totals if value is not None]
-    if line_totals and producer_invoice and producer_total is not None:
+    contract_total = producer_total if producer_invoice else ruspina_total if ruspina_invoice else None
+    if line_totals and contract_total is not None and (producer_invoice or ruspina_invoice):
         line_sum = round(sum(line_totals), 3)
-        delta = round(abs(line_sum - producer_total), 3)
-        checks["line_sum_to_producer_total"] = {
-            "expected": producer_total,
+        delta = round(abs(line_sum - contract_total), 3)
+        check_name = "line_sum_to_ruspina_total" if ruspina_invoice else "line_sum_to_producer_total"
+        checks[check_name] = {
+            "expected": contract_total,
             "actual": line_sum,
             "delta": delta,
-            "passed": delta <= max(tolerance, abs(producer_total) * 0.02),
+            "passed": delta <= max(tolerance, abs(contract_total) * 0.02),
         }
-        if not checks["line_sum_to_producer_total"]["passed"]:
-            warnings.append(f"line totals sum to {line_sum}, producer total is {producer_total}")
-    elif line_totals and fields.amount_ht is not None:
+        if not checks[check_name]["passed"]:
+            label = "RUSPINA invoice total" if ruspina_invoice else "producer total"
+            warnings.append(f"line totals sum to {line_sum}, {label} is {contract_total}")
+    elif line_totals and fields.amount_ht is not None and not ruspina_invoice:
         line_sum = round(sum(line_totals), 3)
         delta = round(abs(line_sum - fields.amount_ht), 3)
         checks["line_sum_to_ht"] = {"expected": fields.amount_ht, "actual": line_sum, "delta": delta, "passed": delta <= max(tolerance, abs(fields.amount_ht) * 0.02)}
@@ -72,7 +77,7 @@ def reason_financials(
 
     line_ttc_totals = [item.line_total_ttc for item in line_items]
     line_ttc_totals = [value for value in line_ttc_totals if value is not None]
-    if line_ttc_totals and fields.amount_ttc is not None:
+    if line_ttc_totals and fields.amount_ttc is not None and not ruspina_invoice:
         line_ttc_sum = round(sum(line_ttc_totals), 3)
         delta = round(abs(line_ttc_sum - fields.amount_ttc), 3)
         checks["line_sum_to_ttc"] = {
@@ -84,12 +89,12 @@ def reason_financials(
         if not checks["line_sum_to_ttc"]["passed"]:
             warnings.append(f"line TTC totals sum to {line_ttc_sum}, TTC is {fields.amount_ttc}")
 
-    if fields.amount_ttc is not None and fields.amount_ttc < 0 and document_type != "credit_note":
+    if not ruspina_invoice and fields.amount_ttc is not None and fields.amount_ttc < 0 and document_type != "credit_note":
         errors.append("negative TTC on a non-credit invoice")
-    if fields.tva_amount is not None and fields.tva_amount < 0 and document_type != "credit_note":
+    if not ruspina_invoice and fields.tva_amount is not None and fields.tva_amount < 0 and document_type != "credit_note":
         errors.append("negative VAT on a non-credit invoice")
     line_rates = sorted({float(item.tax_rate) for item in line_items if item.tax_rate is not None})
-    if len(line_rates) > 1:
+    if len(line_rates) > 1 and not ruspina_invoice:
         checks["mixed_vat_rates"] = {"rates": line_rates, "passed": True}
         warnings.append("multiple VAT rates detected; invoice-level tax rate should be reviewed")
     score = 0.35 if errors else (0.68 if warnings else 0.95)

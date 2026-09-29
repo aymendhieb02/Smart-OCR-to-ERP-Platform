@@ -114,6 +114,23 @@ def test_ocr_deduplication_preserves_repeated_text_across_physical_pages():
     ]
 
 
+def test_ocr_deduplication_prefers_positioned_image_ocr_over_pdf_text_layer():
+    lines = [
+        OCRLine(text="Client: SAMPLE BUYER", confidence=1.0, page_number=1),
+        OCRLine(
+            text="Client: SAMPLE BUYER", confidence=0.91, page_number=1,
+            bbox=BoundingBox(x1=100, y1=200, x2=320, y2=224),
+            page_width=1190, page_height=1684, source="full_page",
+        ),
+    ]
+
+    deduped = _dedupe_ocr_lines(lines)
+
+    assert len(deduped) == 1
+    assert deduped[0].bbox == BoundingBox(x1=100, y1=200, x2=320, y2=224)
+    assert deduped[0].source == "full_page"
+
+
 def test_gray_image_is_converted_to_three_channels():
     gray = np.zeros((10, 12), dtype=np.uint8)
     color = _ensure_color_image(gray)
