@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.core.schemas import DocumentPreview, ExtractedInvoiceFields, LineItem, PreviewPage, ProcessInvoiceResponse, ValidationResult
+from app.core.schemas import (
+    DocumentPreview, DossierLogicalDocument, ExtractedInvoiceFields,
+    LineItem, PreviewPage, ProcessInvoiceResponse,
+    ValidationResult,
+)
 from app.main import app
 from app.api import routes
 from app.services.dossier_segmentation import LogicalDocumentGroup, PageClassification
@@ -53,6 +57,7 @@ def test_process_dossier_returns_typed_isolated_documents_and_physical_preview(m
     assert len(set(ids)) == 3
     assert all(item.startswith(payload["dossier_id"] + ":logical_document_") for item in ids)
     assert [item["response"]["detected_fields"]["invoice_number"] for item in payload["logical_documents"]] == ["6608000533", "202300001", "CUSTOMS"]
+    assert [item["semantic_group"] for item in payload["logical_documents"]] == ["page1", "page2", "page3"]
     assert [item["response"]["detected_fields"]["line_items"][0]["page"] for item in payload["logical_documents"]] == [1, 2, 3]
     assert payload["summary"] == {"status": "needs_review", "valid_count": 1, "needs_review_count": 2, "invalid_count": 0}
 
@@ -77,3 +82,29 @@ def test_process_dossier_supports_one_multi_page_logical_document(monkeypatch):
 def test_process_invoice_contract_remains_registered_as_process_invoice_response():
     route = next(route for route in routes.router.routes if getattr(route, "path", None) == "/process-invoice")
     assert route.response_model is ProcessInvoiceResponse
+
+
+def test_simple_dossier_json_endpoint_returns_only_three_semantic_groups():
+    docs = [
+        DossierLogicalDocument(
+            logical_document_id=f"synthetic:{index}", document_index=index,
+            document_type=doc_type, document_family=family, semantic_group=semantic,
+            physical_page_numbers=[index], response=_response(f"INV-TEST-{index:03d}", index),
+        )
+        for index, (doc_type, family, semantic) in enumerate((
+            ("commercial_invoice", "sotacib_kairouan_grey_invoice_v1", "page1"),
+            ("commercial_invoice", "ruspina_reinvoice_v1", "page2"),
+            ("customs_declaration", "customs_tradenet_v1", "page3"),
+        ), start=1)
+    ]
+    response = TestClient(app).post(
+        "/export-simple-dossier-json",
+        json={"logical_documents": [document.model_dump(mode="json") for document in docs]},
+    )
+
+    assert response.status_code == 200
+    output = response.json()
+    assert list(output) == ["page1", "page2", "page3"]
+    assert len(output["page1"]["fields"]) > 0
+    assert len(output["page2"]["fields"]) > 0
+    assert len(output["page3"]["fields"]) == 8

@@ -416,6 +416,7 @@ class DossierPageClassification(BaseModel):
     page_number: int
     document_type: str
     document_family: str | None = None
+    semantic_group: str | None = None
     match_score: float = 0.0
     matched_anchors: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
@@ -428,6 +429,7 @@ class DossierLogicalDocument(BaseModel):
     document_index: int
     document_type: str
     document_family: str | None = None
+    semantic_group: str | None = None
     physical_page_numbers: list[int] = Field(default_factory=list)
     page_classifications: list[DossierPageClassification] = Field(default_factory=list)
     response: ProcessInvoiceResponse
@@ -465,6 +467,25 @@ class ProcessDossierResponse(BaseModel):
     relationships: list[DossierRelationship] = Field(default_factory=list)
     ocr_engine: str
     timings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SimpleDossierField(BaseModel):
+    name: str
+    value: Any = None
+
+
+class SimpleDossierGroup(BaseModel):
+    fields: list[SimpleDossierField] = Field(default_factory=list)
+
+
+class SimpleDossierOutput(BaseModel):
+    page1: SimpleDossierGroup
+    page2: SimpleDossierGroup
+    page3: SimpleDossierGroup
+
+
+class SimpleDossierInput(BaseModel):
+    logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)
 
 
 class DossierReconciliationSubmission(BaseModel):

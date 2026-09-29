@@ -76,6 +76,11 @@ _EXPORTER_ALIASES = ("exportateur", "exporteur", "exportaleur", "exportcur")
 _IMPORTER_ALIASES = ("importateur", "importateut")
 _DECLARATION_HEADER_ALIASES = ("declaration", "declaraton", "dcaratoa")
 _DOUANES_MASTHEAD_ALIASES = ("douanes tunisiennes", "douanes tuntsiennes", "douanes tunisenne")
+_PRODUCER_FAMILIES = frozenset({
+    "ciments_enfidha_invoice_v1",
+    "sotacib_kasserine_white_invoice_v1",
+    "sotacib_kairouan_grey_invoice_v1",
+})
 
 
 def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
@@ -131,6 +136,24 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
             reasons=(f"matched deterministic anchors for {customs_winner.family}",),
         )
 
+    ruspina_form = _ruspina_form_signals(page_lines)
+    if ruspina_form:
+        return PageClassification(
+            page_number=page_number,
+            document_type="commercial_invoice",
+            document_family="ruspina_reinvoice_v1",
+            match_score=0.96,
+            matched_anchors=ruspina_form,
+            reasons=("RUSPINA re-invoice form evidence matched independently of physical page position",),
+        )
+
+    # RUSPINA's company name can appear as a client on producer invoices. Its
+    # family rule is considered only after the form-specific check above.
+    ranked = [
+        (0.0, priority, rule, ()) if rule.family == "ruspina_reinvoice_v1"
+        else (score, priority, rule, matches)
+        for score, priority, rule, matches in ranked
+    ]
     score, _priority, winner, matches = max(ranked, key=lambda item: (item[0], item[1]))
     customs_layout_matches = tuple(anchor for anchor in _CUSTOMS_LAYOUT_ANCHORS if anchor in match_text)
     if winner.document_type == "commercial_invoice" and len(customs_layout_matches) >= 3:
@@ -161,17 +184,130 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
             customs_matches,
             ("customs evidence found, but no known family reached the rule threshold",),
         )
-    if invoice_matches:
+    invoice_form_matches = _generic_invoice_form_signals(page_lines, match_text)
+    if invoice_matches and invoice_form_matches:
         return PageClassification(
             page_number, "commercial_invoice", None,
-            round(min(0.49, 0.2 + len(invoice_matches) * 0.08), 3),
-            invoice_matches,
-            ("invoice evidence found, but no known family reached the rule threshold",),
+            round(min(0.79, 0.45 + len(invoice_form_matches) * 0.05), 3),
+            tuple(dict.fromkeys(("invoice_label", *invoice_matches, *invoice_form_matches))),
+            ("general supplier invoice has multiple independent invoice-form signals",),
         )
     return PageClassification(
         page_number, "unknown", None, 0.0, (),
         ("no deterministic page-family anchors matched",),
     )
+
+
+def semantic_group_for_document(
+    document_type: str,
+    document_family: str | None,
+    matched_anchors: tuple[str, ...] | list[str] = (),
+) -> str | None:
+    """Map classification evidence to a semantic output group, never by page index."""
+    if document_family == "ruspina_reinvoice_v1":
+        return "page2"
+    if document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
+        return "page3"
+    if document_type == "customs_declaration" and "customs_structure" in matched_anchors:
+        return "page3"
+    if document_family in _PRODUCER_FAMILIES:
+        return "page1"
+    if document_type == "commercial_invoice" and document_family in {None, "general_supplier_invoice"}:
+        if "invoice_label" in matched_anchors and any(
+            anchor in matched_anchors
+            for anchor in ("invoice_identifier", "invoice_date", "supplier_party", "customer_party", "invoice_total", "merchandise_table")
+        ):
+            return "page1"
+    return None
+
+
+def _ruspina_form_signals(lines: list[OCRLine]) -> tuple[str, ...]:
+    normalized = [_matching_text(line.text) for line in lines if line.text.strip()]
+    if not normalized:
+        return ()
+    joined = "\n".join(normalized)
+    has_reference = bool(re.search(r"\bas\s+per\s+invoice\b", joined))
+    if not has_reference:
+        return ()
+
+    client_mention = any(
+        re.search(r"\b(?:client|customer|buyer|acheteur)\b[^\n]*\bruspina\b", line)
+        or (
+            re.fullmatch(r"(?:client|customer|buyer|acheteur)", line)
+            and index + 1 < len(normalized)
+            and "ruspina" in normalized[index + 1]
+        )
+        or (
+            index > 0
+            and re.fullmatch(r"(?:client|customer|buyer|acheteur)", normalized[index - 1])
+            and "ruspina" in line
+        )
+        for index, line in enumerate(normalized)
+    )
+    issuer_heading = False
+    for line in lines:
+        text = _matching_text(line.text)
+        if not re.search(r"\bruspina\b", text):
+            continue
+        if re.search(r"\b(?:client|customer|buyer|acheteur)\b", text):
+            continue
+        top_header = bool(
+            line.bbox and line.page_height
+            and ((line.bbox.y1 + line.bbox.y2) / 2) / line.page_height <= 0.25
+        )
+        explicit_heading = bool(re.search(r"\bruspina\s+(?:invoice|import\s+export|import\s+et\s+export)\b", text))
+        if top_header or explicit_heading:
+            issuer_heading = True
+            break
+
+    form_markers = (
+        "gross weight", "net weight", "number of bags", "delivery", "origin",
+        "bank transfer", "iban", "swift", "amount in words",
+    )
+    marker_count = sum(any(marker in line for line in normalized) for marker in form_markers)
+    invoice_header = any(re.search(r"\binvoice\b", line) for line in normalized)
+    date_present = any(
+        re.search(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)", line.text)
+        for line in lines
+    )
+
+    # Explicit customer-role evidence wins over the incidental company name.
+    # Otherwise accept an issuer heading, or the recurring re-invoice layout
+    # (reference + invoice/date + several characteristic form fields).
+    if client_mention and not issuer_heading:
+        return ()
+    if issuer_heading:
+        return ("ruspina_form_reference", "ruspina_issuer_heading")
+    if invoice_header and date_present and marker_count >= 3:
+        return ("ruspina_form_reference", "ruspina_reinvoice_layout")
+    return ()
+
+
+def _generic_invoice_form_signals(lines: list[OCRLine], match_text: str) -> tuple[str, ...]:
+    normalized_lines = [_matching_text(line.text) for line in lines if line.text.strip()]
+    signals: list[str] = []
+    if re.search(r"\b(?:invoice|facture|فاتورة)\b[^\n]{0,30}\b(?:no|number|numero|n|#)\b", match_text):
+        signals.append("invoice_identifier")
+    if any(
+        re.search(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)", line.text)
+        for line in lines
+    ):
+        signals.append("invoice_date")
+    if any(re.search(r"\b(?:supplier|seller|vendeur|fournisseur)\b", line) for line in normalized_lines):
+        signals.append("supplier_party")
+    if any(re.search(r"\b(?:customer|client|buyer|acheteur|consignee|destinataire)\b", line) for line in normalized_lines):
+        signals.append("customer_party")
+    if any(re.search(r"\b(?:total|amount due|montant|total ttc)\b", line) for line in normalized_lines):
+        signals.append("invoice_total")
+    if any(re.search(r"\b(?:quantity|qty|unit price|description|designation des marchandises)\b", line) for line in normalized_lines):
+        signals.append("merchandise_table")
+    # The invoice anchor itself is required by the caller; supporting evidence
+    # must include two independent signals and at least one document identifier,
+    # date, amount, or merchandise-table cue.
+    qualifying = [item for item in signals if item in {"invoice_identifier", "invoice_date", "invoice_total", "merchandise_table"}]
+    if len(signals) < 2 or not qualifying:
+        return ()
+    return tuple(signals)
 
 
 def _tradenet_structure_signals(lines: list[OCRLine]) -> dict[str, bool]:
