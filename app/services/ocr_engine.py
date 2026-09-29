@@ -50,10 +50,14 @@ class OCREngine:
         engine_name = "EmbeddedText"
 
         if embedded_text.strip():
-            for index, line in enumerate(embedded_text.splitlines(), start=1):
-                clean = line.strip()
-                if clean:
-                    lines.append(OCRLine(text=clean, confidence=1.0, page_number=index))
+            # FileLoader separates PDF page text with form feeds. Lines within
+            # a page share that page's physical number; plain caller-provided
+            # text is conservatively treated as page 1, never line N = page N.
+            for page_number, page_text in enumerate(embedded_text.split("\f"), start=1):
+                for line in page_text.splitlines():
+                    clean = line.strip()
+                    if clean:
+                        lines.append(OCRLine(text=clean, confidence=1.0, page_number=page_number))
 
         if images:
             try:

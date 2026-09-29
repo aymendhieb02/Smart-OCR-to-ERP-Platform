@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from app.core.schemas import BoundingBox, OCRLine, OCRResult
 from app.services.file_loader import LoadedDocument
@@ -184,3 +185,90 @@ def test_existing_single_document_entry_point_signature_remains_compatible():
     assert "path" in parameters
     assert "ocr_engine" in parameters
     assert "physical_page_numbers" not in parameters
+
+
+@pytest.mark.parametrize(
+    ("page_text", "expected_type", "expected_family", "expected_semantic_group"),
+    [
+        ("SOTACIB KAIROUAN Facture", "commercial_invoice", "sotacib_kairouan_grey_invoice_v1", "page1"),
+        (
+            "RUSPINA INVOICE\nAs Per Invoice INV-TEST-001\nDate 01/02/2026\n"
+            "Gross Weight 1000T\nNet Weight 900T\nNumber of Bags 200\nDelivery EX-WORKS",
+            "commercial_invoice", "ruspina_reinvoice_v1", "page2",
+        ),
+        ("TRADENET Declaration en detail", "customs_declaration", "customs_tradenet_v1", "page3"),
+    ],
+)
+def test_single_physical_page_semantic_groups_keep_physical_page_one(
+    monkeypatch, tmp_path, page_text, expected_type, expected_family, expected_semantic_group,
+):
+    from app.services.dossier_segmentation import semantic_group_for_document
+    from app.services.ocr_engine import OCREngine
+
+    source = LoadedDocument(
+        source_file="one-page.pdf", extension=".pdf", embedded_text=page_text,
+        images=[np.zeros((10, 10, 3), dtype=np.uint8)],
+    )
+    monkeypatch.setattr("app.services.pipeline_runner.load_document", lambda *args, **kwargs: source)
+    monkeypatch.setattr(OCREngine, "_run_paddle", lambda self, images: [])
+    monkeypatch.setattr(OCREngine, "run_fallback_regions", lambda self, images, names, *, page_numbers=None: [])
+    monkeypatch.setattr("app.services.pipeline_runner._process_ocr_document", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.pipeline_runner.reconcile_dossier", lambda documents: ())
+
+    result = process_dossier_file(tmp_path / "one-page.pdf", ocr_engine=OCREngine(use_disk_cache=False))
+
+    assert len(result.logical_documents) == 1
+    logical_document = result.logical_documents[0]
+    assert logical_document.group.pages == (1,)
+    assert logical_document.group.document_type == expected_type
+    assert logical_document.group.document_family == expected_family
+    assert semantic_group_for_document(logical_document.group.document_type, expected_family) == expected_semantic_group
+
+
+@pytest.mark.parametrize(
+    ("page_texts", "expected"),
+    [
+        (
+            ("TRADENET Declaration en detail", "SOTACIB KAIROUAN Facture"),
+            {"page3": (1,), "page1": (2,)},
+        ),
+        (
+            (
+                "RUSPINA INVOICE\nAs Per Invoice INV-TEST-001\nDate 01/02/2026\nGross Weight 1000T\n"
+                "Net Weight 900T\nNumber of Bags 200\nDelivery EX-WORKS",
+                "TRADENET Declaration en detail",
+            ),
+            {"page2": (1,), "page3": (2,)},
+        ),
+        (
+            (
+                "TRADENET Declaration en detail",
+                "SOTACIB KAIROUAN Facture",
+                "RUSPINA INVOICE\nAs Per Invoice INV-TEST-001\nDate 01/02/2026\nGross Weight 1000T\n"
+                "Net Weight 900T\nNumber of Bags 200\nDelivery EX-WORKS",
+            ),
+            {"page3": (1,), "page1": (2,), "page2": (3,)},
+        ),
+    ],
+)
+def test_reordered_semantic_groups_preserve_original_physical_pages(monkeypatch, tmp_path, page_texts, expected):
+    from app.services.dossier_segmentation import semantic_group_for_document
+    from app.services.ocr_engine import OCREngine
+
+    source = LoadedDocument(
+        source_file="reordered.pdf", extension=".pdf", embedded_text="\f".join(page_texts),
+        images=[np.zeros((10, 10, 3), dtype=np.uint8) for _ in page_texts],
+    )
+    monkeypatch.setattr("app.services.pipeline_runner.load_document", lambda *args, **kwargs: source)
+    monkeypatch.setattr(OCREngine, "_run_paddle", lambda self, images: [])
+    monkeypatch.setattr(OCREngine, "run_fallback_regions", lambda self, images, names, *, page_numbers=None: [])
+    monkeypatch.setattr("app.services.pipeline_runner._process_ocr_document", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.pipeline_runner.reconcile_dossier", lambda documents: ())
+
+    result = process_dossier_file(tmp_path / "reordered.pdf", ocr_engine=OCREngine(use_disk_cache=False))
+    actual = {}
+    for document in result.logical_documents:
+        group = semantic_group_for_document(document.group.document_type, document.group.document_family)
+        actual[group] = document.group.pages
+
+    assert actual == expected

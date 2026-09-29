@@ -80,6 +80,20 @@ def test_model_initialization_failure_degrades_without_crashing(monkeypatch):
     assert result.raw_text == ""
 
 
+def test_embedded_text_lines_keep_their_physical_page(monkeypatch):
+    monkeypatch.setattr(OCREngine, "_run_paddle", lambda self, images: [])
+    engine = OCREngine(use_disk_cache=False)
+
+    one_page = engine.run([np.zeros((30, 30, 3), dtype=np.uint8)], "Invoice\nNumber\nTotal")
+    three_pages = engine.run(
+        [np.zeros((30, 30, 3), dtype=np.uint8) for _ in range(3)],
+        "Invoice\nNumber\f\fCustoms declaration\nTotal",
+    )
+
+    assert [line.page_number for line in one_page.lines] == [1, 1, 1]
+    assert [line.page_number for line in three_pages.lines] == [1, 1, 3, 3]
+
+
 def test_gray_image_is_converted_to_three_channels():
     gray = np.zeros((10, 12), dtype=np.uint8)
     color = _ensure_color_image(gray)
