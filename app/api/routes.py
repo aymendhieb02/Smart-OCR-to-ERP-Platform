@@ -28,7 +28,8 @@ from app.services.dossier_reconciler import reconcile_dossier
 from app.services.erp_mapper import map_to_flat_erp
 from app.services.file_loader import save_upload_to_temp
 from app.services.ocr_engine import OCREngine
-from app.services.pipeline_runner import process_document_file, process_dossier_file
+from app.services.json_writer import write_erp_json, write_invoice_validation_report
+from app.services.pipeline_runner import process_dossier_file
 from app.services.dossier_segmentation import semantic_group_for_document
 from app.services.simple_dossier_json import build_simple_dossier_output
 
@@ -60,13 +61,27 @@ async def process_invoice(file: UploadFile = File(...)) -> ProcessInvoiceRespons
     temp_path: Path | None = None
     try:
         temp_path = await save_upload_to_temp(file)
-        return process_document_file(
+        result = process_dossier_file(
             temp_path,
             original_filename=file.filename,
             ocr_engine=ocr_engine,
-            include_preview=True,
-            persist_erp_json=True,
+            persist_erp_json=False,
         )
+        if len(result.logical_documents) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="This file contains multiple logical documents; use /process-dossier.",
+            )
+
+        response = result.logical_documents[0].response
+        response.document_preview = result.document_preview
+        write_erp_json(response.erp_json)
+        write_invoice_validation_report(
+            response.invoice_validation_report,
+            result.source_file,
+            response.detected_fields.invoice_number,
+        )
+        return response
     except HTTPException:
         raise
     except ValueError as exc:
