@@ -517,11 +517,11 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
             )
             break
     fallback_patterns = [
-        ("number_of_bags", r"(\d[\d\s,.]*)\s*(?:bags?|sacs?)\b"),
-        ("bag_weight", r"\b(\d+(?:[,.]\d+)?)\s*(?:kg|g)\b"),
+        ("number_of_bags", r"(?P<value>\d[\d\s,.]*)\s*(?:bags?|sacs?)\b"),
+        ("bag_weight", r"\b(?P<value>\d+(?:[,.]\d+)?)\s*(?:kgs?|g(?:rams?)?)\b"),
     ]
     if "truck_count" in field_labels:
-        fallback_patterns.append(("truck_count", r"(\d[\d\s,.]*)\s*(?:trucks?|camions?)\b"))
+        fallback_patterns.append(("truck_count", r"(?P<value>\d[\d\s,.]*)\s*(?:trucks?|camions?)\b"))
     for field_name, pattern in fallback_patterns:
         if field_name in extracted:
             continue
@@ -533,10 +533,11 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
             match = re.search(pattern, text, re.IGNORECASE)
             if not match:
                 continue
-            value = match.group(0).strip()
+            value = match.group("value").strip()
+            display_value = match.group(0).strip()
             extracted[field_name] = FieldExtractionDetail(
                 value=value,
-                display_value=value,
+                display_value=display_value,
                 machine_value=value,
                 confidence=getattr(line, "confidence", None),
                 bbox=getattr(line, "bbox", None),

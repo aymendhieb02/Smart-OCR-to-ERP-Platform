@@ -9,6 +9,7 @@ from app.services.producer_invoice_review import (
     SOTACIB_FAMILIES,
     apply_producer_review_fields,
     merge_producer_semantics,
+    prepare_producer_fields,
 )
 
 
@@ -167,6 +168,19 @@ def test_enfidha_bulk_exposes_truck_count_without_bag_only_values():
     assert response.expanded_fields["truck_count"].display_value == "5 trucks"
     assert response.expanded_fields["number_of_bags"].value is None
     assert response.expanded_fields["bag_weight"].value is None
+
+
+def test_generic_bag_quantity_and_weight_keep_numeric_values_and_source_display():
+    lines = [
+        SimpleNamespace(text="20000 Bags/50 kgs", confidence=0.94, page_number=1),
+    ]
+
+    fields = prepare_producer_fields(ExtractedInvoiceFields(), lines, ENFIDHA_FAMILY)
+
+    assert fields["number_of_bags"].value == "20000"
+    assert fields["number_of_bags"].display_value == "20000 Bags"
+    assert fields["bag_weight"].value == "50"
+    assert fields["bag_weight"].display_value == "50 kgs"
 
 
 def test_producer_field_correction_uses_existing_store_and_preserves_machine_evidence(tmp_path, monkeypatch):
