@@ -8,6 +8,7 @@ from app.services.ocr_engine import OCREngine
 from app.services.ocr_engine import _ensure_color_image
 from app.services.ocr_engine import _item_with_page_bbox
 from app.services.ocr_engine import _iter_paddle_items
+from app.services.ocr_engine import _dedupe_ocr_lines
 from app.services.ocr_engine import normalize_paddle_bbox
 from app.services.table_regions import OCRRegion
 
@@ -92,6 +93,25 @@ def test_embedded_text_lines_keep_their_physical_page(monkeypatch):
 
     assert [line.page_number for line in one_page.lines] == [1, 1, 1]
     assert [line.page_number for line in three_pages.lines] == [1, 1, 3, 3]
+
+
+def test_ocr_deduplication_preserves_repeated_text_across_physical_pages():
+    lines = [
+        OCRLine(text="Invoice Number", confidence=0.91, page_number=1),
+        OCRLine(text=" invoice   number ", confidence=0.88, page_number=1),
+        OCRLine(text="Invoice Number", confidence=0.93, page_number=2),
+        OCRLine(text="TOTAL", confidence=0.95, page_number=2),
+        OCRLine(text="Total", confidence=0.92, page_number=3),
+    ]
+
+    deduped = _dedupe_ocr_lines(lines)
+
+    assert [(line.text, line.page_number) for line in deduped] == [
+        ("Invoice Number", 1),
+        ("Invoice Number", 2),
+        ("TOTAL", 2),
+        ("Total", 3),
+    ]
 
 
 def test_gray_image_is_converted_to_three_channels():

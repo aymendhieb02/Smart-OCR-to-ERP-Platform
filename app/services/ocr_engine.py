@@ -629,10 +629,15 @@ def _tesseract_string_lines(pytesseract, image: np.ndarray, page_number: int, co
 
 def _dedupe_ocr_lines(lines: list[OCRLine]) -> list[OCRLine]:
     unique: list[OCRLine] = []
-    seen: set[str] = set()
+    seen: set[tuple[int, str]] = set()
     for line in lines:
-        key = normalize_text(line.text).lower()
-        if not key or key in seen:
+        normalized = normalize_text(line.text).lower()
+        if not normalized:
+            continue
+        # Keep repeated labels/values on different physical pages. A dossier
+        # must retain the same per-page OCR evidence as a standalone upload.
+        key = (line.page_number, normalized)
+        if key in seen:
             continue
         seen.add(key)
         unique.append(line)
