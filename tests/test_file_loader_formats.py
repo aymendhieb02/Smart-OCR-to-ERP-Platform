@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import fitz
 import numpy as np
 import pytest
 from PIL import Image
@@ -50,3 +51,18 @@ def test_invalid_supported_image_returns_decode_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="decode_error"):
         load_document(path, "broken.jfif")
+
+
+def test_pdf_embedded_text_keeps_empty_physical_pages_in_its_separators(tmp_path: Path) -> None:
+    path = tmp_path / "physical-pages.pdf"
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 72), "Page one\nSecond line")
+    pdf.new_page()
+    pdf.new_page().insert_text((72, 72), "Page three")
+    pdf.save(path)
+    pdf.close()
+
+    document = load_document(path, path.name)
+
+    assert len(document.images) == 3
+    assert document.embedded_text.split("\f") == ["Page one\nSecond line", "", "Page three"]

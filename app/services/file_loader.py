@@ -47,14 +47,15 @@ def load_document(path: Path, original_filename: str | None = None, timing_recor
 
 def _load_pdf(path: Path, source_file: str, timing_recorder=None) -> LoadedDocument:
     doc = fitz.open(path)
-    text_parts: list[str] = []
+    page_texts: list[str] = []
     images: list[np.ndarray] = []
 
     try:
         for page in doc:
             page_text = normalize_text(page.get_text("text"))
-            if page_text:
-                text_parts.append(page_text)
+            # Keep an entry for every physical PDF page, including pages with
+            # no text layer, so downstream OCR can preserve physical provenance.
+            page_texts.append(page_text)
 
             context = timing_recorder.stage("pdf_rendering", page_number=page.number + 1) if timing_recorder else _noop_stage()
             with context:
@@ -69,7 +70,7 @@ def _load_pdf(path: Path, source_file: str, timing_recorder=None) -> LoadedDocum
     return LoadedDocument(
         source_file=source_file,
         extension=".pdf",
-        embedded_text="\n\n".join(text_parts),
+        embedded_text="\f".join(page_texts),
         images=images,
     )
 

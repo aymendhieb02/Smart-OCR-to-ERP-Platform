@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.core.schemas import (
     DocumentPreview, DossierLogicalDocument, ExtractedInvoiceFields,
@@ -108,3 +109,30 @@ def test_simple_dossier_json_endpoint_returns_only_three_semantic_groups():
     assert len(output["page1"]["fields"]) > 0
     assert len(output["page2"]["fields"]) > 0
     assert len(output["page3"]["fields"]) == 8
+
+
+@pytest.mark.parametrize(
+    ("document_type", "family", "semantic_group", "expected_nonempty"),
+    [
+        ("commercial_invoice", "ruspina_reinvoice_v1", "page2", "page2"),
+        ("customs_declaration", "customs_tradenet_v1", "page3", "page3"),
+    ],
+)
+def test_simple_dossier_json_single_semantic_document_needs_no_fake_physical_pages(
+    document_type, family, semantic_group, expected_nonempty,
+):
+    document = DossierLogicalDocument(
+        logical_document_id="synthetic:one-page", document_index=1,
+        document_type=document_type, document_family=family, semantic_group=semantic_group,
+        physical_page_numbers=[1], response=_response("INV-TEST-001", 1),
+    )
+
+    response = TestClient(app).post(
+        "/export-simple-dossier-json",
+        json={"logical_documents": [document.model_dump(mode="json")]},
+    )
+
+    assert response.status_code == 200
+    output = response.json()
+    assert output[expected_nonempty]["fields"]
+    assert all(output[key]["fields"] == [] for key in {"page1", "page2", "page3"} - {expected_nonempty})
