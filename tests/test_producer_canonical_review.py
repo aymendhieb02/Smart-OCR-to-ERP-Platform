@@ -158,6 +158,53 @@ def test_labeled_ocr_exposes_source_faithful_packaging_and_distinct_sotacib_fiel
     assert response.expanded_fields["payment_terms"].value == "30 jours"
 
 
+def test_total_amount_words_prefers_horizontally_aligned_value_over_far_right_neighbor():
+    label = OCRLine(
+        text="La somme de:", confidence=0.92, page_number=1, line_index=1,
+        bbox=BoundingBox(x1=172, y1=611, x2=559, y2=635),
+        source="synthetic fixture",
+    )
+    expected = OCRLine(
+        text="ONE THOUSAND TEST EUROS", confidence=0.94, page_number=1, line_index=2,
+        bbox=BoundingBox(x1=167, y1=644, x2=572, y2=667),
+        source="synthetic fixture",
+    )
+    unrelated_far_right = OCRLine(
+        text="123.00", confidence=0.98, page_number=1, line_index=3,
+        bbox=BoundingBox(x1=1005, y1=636, x2=1093, y2=657),
+        source="synthetic regional fallback",
+    )
+
+    fields = prepare_producer_fields(
+        ExtractedInvoiceFields(), [label, expected, unrelated_far_right], next(iter(SOTACIB_FAMILIES)),
+    )
+
+    assert fields["total_amount_words"].value == expected.text
+    assert fields["total_amount_words"].line_index == expected.line_index
+    assert fields["total_amount_words"].bbox.x1 == expected.bbox.x1
+
+
+def test_sotacib_french_destination_phrase_uses_positioned_evidence():
+    unpositioned = OCRLine(
+        text="Marchandise Destinee a l'exportation vers OTHER_TEST", confidence=0.9,
+        page_number=1, line_index=1, source="synthetic embedded text",
+    )
+    positioned = OCRLine(
+        text="Marchandlse Destlnee a I'exportation vers COUNTRY_TEST", confidence=0.94,
+        page_number=1, line_index=2,
+        bbox=BoundingBox(x1=100, y1=300, x2=620, y2=322),
+        source="synthetic positioned OCR",
+    )
+
+    fields = prepare_producer_fields(
+        ExtractedInvoiceFields(), [unpositioned, positioned], next(iter(SOTACIB_FAMILIES)),
+    )
+
+    assert fields["destination"].value == "COUNTRY_TEST"
+    assert fields["destination"].line_index == positioned.line_index
+    assert fields["destination"].bbox.x1 == positioned.bbox.x1
+
+
 def test_enfidha_bulk_exposes_truck_count_without_bag_only_values():
     lines = [
         SimpleNamespace(text="PACKING: BULK", confidence=0.9, page_number=1, bbox=None),

@@ -66,7 +66,10 @@ COMMON_LABELS = {
     "hs_code": (r"hs\s*code", r"position\s*tarifaire"),
     "incoterm": (r"^incoterm$", r"delivery\s*term", r"conditions?\s*de\s*livraison"),
     "origin": (r"^origin$", r"origine", r"country\s*of\s*origin"),
-    "destination": (r"^destination$", r"country\s*of\s*destination"),
+    "destination": (
+        r"^destination$", r"country\s*of\s*destination",
+        r"marchand[i1l]se\s+dest[i1l]n[eé]e?\s+[àa]\s+[il1]['’]exportation\s+vers",
+    ),
     "packaging": (r"pack(?:ing|aging)", r"conditionnement", r"emballage"),
 }
 ENFIDHA_LABELS = {
@@ -620,12 +623,17 @@ def _detail(line, value: str, source: str) -> FieldExtractionDetail:
 
 def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...]]) -> dict[str, FieldExtractionDetail]:
     extracted: dict[str, FieldExtractionDetail] = {}
-    for line in lines:
-        text = str(getattr(line, "text", "") or "").strip()
-        if not text:
+    for field_name, aliases in field_labels.items():
+        if field_name in extracted:
             continue
-        for field_name, aliases in field_labels.items():
-            if field_name in extracted:
+        field_lines = lines
+        if field_name in {"total_amount_words", "origin", "destination"}:
+            # Prefer source lines with page geometry when the same field is
+            # also present in unpositioned embedded PDF text.
+            field_lines = sorted(lines, key=lambda item: getattr(item, "bbox", None) is None)
+        for line in field_lines:
+            text = str(getattr(line, "text", "") or "").strip()
+            if not text:
                 continue
             for alias in sorted(aliases, key=len, reverse=True):
                 exact_label = alias.startswith("^") and alias.endswith("$")
@@ -674,6 +682,8 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
                         text if evidence_line is line
                         else f"{text} {getattr(evidence_line, 'text', '')}".strip()
                     )
+                break
+            if field_name in extracted:
                 break
     if "proforma_invoice_number" in field_labels or "proforma_invoice_date" in field_labels:
         for line in lines:
@@ -777,7 +787,9 @@ def _nearest_labeled_value(lines: list, label, field_name: str | None = None) ->
         if center_gap_y > max(38.0, height * 1.8) or other.x1 < box.x1 - 12:
             continue
         right_bias = -((other.x1 + other.x2) / 2) * 0.035 if field_name == "total" else 0
-        score = center_gap_y + abs(other.x1 - box.x2) * 0.01 + right_bias
+        horizontal_gap = max(0.0, other.x1 - box.x2, box.x1 - other.x2)
+        horizontal_alignment_penalty = horizontal_gap * 0.1 if field_name == "total_amount_words" else 0.0
+        score = center_gap_y + abs(other.x1 - box.x2) * 0.01 + right_bias + horizontal_alignment_penalty
         if field_name == "total_amount_words" and ((other.y1 + other.y2) / 2) <= ((box.y1 + box.y2) / 2):
             continue
         candidates.append((score, text, line))
