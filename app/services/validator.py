@@ -33,7 +33,12 @@ def validate_invoice(
     elif fields.invoice_date > date.today():
         warnings.append("Document date is in the future")
 
-    if document_type in {"invoice", "credit_note", "receipt"} and not (producer_invoice and producer_total is not None):
+    if producer_invoice:
+        if producer_total is None:
+            warnings.append("Producer invoice total is missing")
+        elif producer_total <= 0:
+            errors.append("Producer invoice total must be positive")
+    elif document_type in {"invoice", "credit_note", "receipt"}:
         if fields.amount_ttc is None:
             warnings.append("Total amount TTC is missing")
         elif document_type != "credit_note" and fields.amount_ttc <= 0:
@@ -48,6 +53,8 @@ def validate_invoice(
             )
         elif mismatch > 0.01:
             warnings.append(f"Small amount rounding difference: HT + TVA = {expected}, TTC = {fields.amount_ttc}")
+    elif producer_invoice and producer_total is not None:
+        pass
     elif document_type == "invoice":
         warnings.append("Insufficient semantically valid totals for complete financial consistency check" if producer_invoice else "One or more amount fields are missing, total consistency could not be fully checked")
 

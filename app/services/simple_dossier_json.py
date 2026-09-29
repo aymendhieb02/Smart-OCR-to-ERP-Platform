@@ -75,7 +75,11 @@ def build_simple_dossier_output(dossier_result: Any) -> SimpleDossierOutput:
                 continue
             value = None
             for _page, response, _family in documents:
-                value = _effective_field_value(response, field_name)
+                value = _effective_field_value(
+                    response,
+                    field_name,
+                    canonical_authoritative=semantic_group == "page1",
+                )
                 if value is not None:
                     break
             fields.append(SimpleDossierField(name=field_name, value=value))
@@ -114,9 +118,26 @@ def _field_contract(semantic_group: str, family: str | None) -> list[str]:
     return [*fields, "line_items"]
 
 
-def _effective_field_value(response: Any, field_name: str) -> Any:
+def _effective_field_value(response: Any, field_name: str, *, canonical_authoritative: bool = False) -> Any:
     expanded = _value(response, "expanded_fields") or {}
     aliases = PRODUCER_ALIASES.get(field_name, (field_name,))
+    canonical_detail = _mapping_value(expanded, field_name) if canonical_authoritative else None
+    if canonical_detail is not None:
+        source = str(_value(canonical_detail, "source") or "").casefold()
+        value = _value(canonical_detail, "value")
+        if any(marker in source for marker in ("human correction", "manual correction", "review correction")):
+            return value
+        canonical_value = _value(canonical_detail, "canonical_value")
+        if canonical_value is not None:
+            return canonical_value
+        if value is not None:
+            return value
+        machine_value = _value(canonical_detail, "machine_value")
+        if machine_value is not None:
+            return machine_value
+        # A present-but-empty Page-1 canonical detail means “not extracted”.
+        # Do not resurrect a stale generic supplier/customer/amount alias.
+        return None
     detail = next((_mapping_value(expanded, alias) for alias in aliases if _mapping_value(expanded, alias) is not None), None)
     if detail is not None:
         source = str(_value(detail, "source") or "").casefold()
