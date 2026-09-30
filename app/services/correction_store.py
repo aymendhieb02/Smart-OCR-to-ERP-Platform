@@ -126,7 +126,11 @@ def validate_review_corrections(payload: ReviewCorrectionSubmission) -> ReviewCo
             detail["display_value"] = value
             if payload.document_family == "ruspina_reinvoice_v1":
                 detail["normalized_value"] = normalize_ruspina_review_value(field_name, value)
-            if not detail.get("source"):
+            if (payload.document_family == "ruspina_reinvoice_v1"
+                    and metadata.get("user_action") == "accepted"
+                    and metadata.get("source") == "targeted OCR accepted by reviewer"):
+                detail["source"] = metadata.get("source") or "targeted OCR accepted by reviewer"
+            elif not detail.get("source"):
                 detail["source"] = "human correction"
             if detail.get("confidence") is None:
                 detail["confidence"] = 1.0

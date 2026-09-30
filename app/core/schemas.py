@@ -469,6 +469,37 @@ class ProcessDossierResponse(BaseModel):
     timings: dict[str, Any] = Field(default_factory=dict)
 
 
+class RuspinaAddressRereadContext(BaseModel):
+    semantic_group: str
+    document_family: str
+    field: str
+    page: int
+    label_line_index: int | None = None
+    current_value: str | None = None
+    current_confidence: float | None = None
+    current_source: str | None = None
+    field_bbox: BoundingBox | None = None
+    page_width: int | None = None
+    page_height: int | None = None
+    ocr_blocks: list[OCRLine] = Field(default_factory=list)
+
+
+class RuspinaAddressRereadResponse(BaseModel):
+    field: str
+    current_value: str | None = None
+    reread_value: str | None = None
+    current_confidence: float | None = None
+    reread_confidence: float | None = None
+    current_source: str | None = None
+    reread_source: str
+    page: int
+    reread_bbox: BoundingBox
+    reread_performed: bool = True
+    regional_ocr_calls: int = 1
+    full_page_ocr_calls: int = 0
+    latency_ms: float
+
+
 class SimpleDossierField(BaseModel):
     name: str
     value: Any = None

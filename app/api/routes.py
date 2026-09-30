@@ -1,10 +1,12 @@
-from pathlib import Path
+import json
 import subprocess
 import sys
+import time
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.core.schemas import (
     CorrectionResponse,
@@ -20,13 +22,16 @@ from app.core.schemas import (
     ProcessInvoiceResponse,
     ReviewCorrectionResponse,
     ReviewCorrectionSubmission,
+    RuspinaAddressRereadContext,
+    RuspinaAddressRereadResponse,
     SimpleDossierOutput,
 )
 from app.services.correction_store import submit_corrections, validate_review_corrections
 from app.services.correction_identity import correction_document_id
 from app.services.dossier_reconciler import reconcile_dossier
 from app.services.erp_mapper import map_to_flat_erp
-from app.services.file_loader import save_upload_to_temp
+from app.services.file_loader import load_document_page, save_upload_to_temp
+from app.services.manual_field_reread import reread_ruspina_address as run_ruspina_address_reread
 from app.services.ocr_engine import OCREngine
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.pipeline_runner import process_dossier_file
@@ -238,6 +243,39 @@ async def validate_invoice_review_corrections(payload: ReviewCorrectionSubmissio
         return validate_review_corrections(payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Review correction validation failed: {exc}") from exc
+
+
+@router.post("/review/ruspina-address/reread", response_model=RuspinaAddressRereadResponse)
+async def reread_ruspina_address(
+    file: UploadFile = File(...),
+    context_json: str = Form(...),
+) -> RuspinaAddressRereadResponse:
+    """Reread only the reviewed RUSPINA address row; never updates corrections."""
+    started = time.perf_counter()
+    temp_path: Path | None = None
+    try:
+        try:
+            context = RuspinaAddressRereadContext.model_validate(json.loads(context_json))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid address reread context") from exc
+        if (context.semantic_group, context.document_family, context.field) != (
+            "page2", "ruspina_reinvoice_v1", "address",
+        ):
+            raise HTTPException(status_code=422, detail="Only the RUSPINA Page-2 address can be reread")
+        temp_path = await save_upload_to_temp(file)
+        image = load_document_page(temp_path, context.page)
+        result = run_ruspina_address_reread(image, context, ocr_engine)
+        result.latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        return result
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Targeted address OCR failed; the current value was not changed") from exc
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
 
 
 @router.post("/review/reconcile-dossier")

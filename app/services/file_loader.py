@@ -45,6 +45,24 @@ def load_document(path: Path, original_filename: str | None = None, timing_recor
     return _load_image(path, original_filename or path.name, timing_recorder=timing_recorder)
 
 
+def load_document_page(path: Path, page_number: int) -> np.ndarray:
+    """Render one physical page for a user-invoked regional review action."""
+    extension = path.suffix.lower()
+    if extension == ".pdf":
+        with fitz.open(path) as doc:
+            if page_number < 1 or page_number > len(doc):
+                raise ValueError("Requested physical page is outside the uploaded document")
+            pix = doc[page_number - 1].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n == 3:
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            return image
+    if page_number != 1:
+        raise ValueError("Image uploads contain only physical page 1")
+    image = _load_image(path, path.name).images[0]
+    return image
+
+
 def _load_pdf(path: Path, source_file: str, timing_recorder=None) -> LoadedDocument:
     doc = fitz.open(path)
     page_texts: list[str] = []
