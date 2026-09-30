@@ -80,6 +80,36 @@ def test_process_dossier_supports_one_multi_page_logical_document(monkeypatch):
     assert [item["page_number"] for item in payload["logical_documents"][0]["page_classifications"]] == [1, 2]
 
 
+def test_process_dossier_returns_unresolved_routing_without_creating_a_logical_document(monkeypatch):
+    classification = PageClassification(
+        page_number=1, document_type="commercial_invoice", document_family=None,
+        match_score=0.7, matched_anchors=("invoice_label",), reasons=("unresolved synthetic commercial structure",),
+        routing_status="review_required", candidate_semantic_groups=("page1", "page2"),
+    )
+    result = DossierProcessResult(
+        source_file="synthetic.pdf", page_count=1, page_classifications=(classification,),
+        logical_documents=(),
+        document_preview=DocumentPreview(source_file="synthetic.pdf", pages=[PreviewPage(page=1, url="/p1.png", width=10, height=10)]),
+        ocr_engine="synthetic", timings={},
+    )
+    monkeypatch.setattr(routes, "process_dossier_file", lambda *args, **kwargs: result)
+
+    response = TestClient(app).post("/process-dossier", files={"file": ("synthetic.pdf", b"pdf", "application/pdf")})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["logical_documents"] == []
+    assert payload["document_count"] == 1
+    assert payload["routing_review_items"] == [{
+        "physical_page": 1,
+        "current_generic_classification": "commercial_invoice",
+        "detected_family": None,
+        "routing_status": "review_required",
+        "candidate_semantic_groups": ["page1", "page2"],
+    }]
+    assert payload["page_classifications"][0]["semantic_group"] is None
+
+
 def test_process_invoice_contract_remains_registered_as_process_invoice_response():
     route = next(route for route in routes.router.routes if getattr(route, "path", None) == "/process-invoice")
     assert route.response_model is ProcessInvoiceResponse
@@ -176,6 +206,44 @@ def test_simple_dossier_json_endpoint_returns_only_three_semantic_groups():
     assert len(output["page1"]["fields"]) > 0
     assert len(output["page2"]["fields"]) > 0
     assert len(output["page3"]["fields"]) == 8
+
+
+def test_simple_dossier_export_is_blocked_while_routing_is_unresolved():
+    response = TestClient(app).post(
+        "/export-simple-dossier-json",
+        json={"logical_documents": [], "routing_review_items": [{
+            "physical_page": 2,
+            "current_generic_classification": "commercial_invoice",
+            "detected_family": None,
+            "routing_status": "review_required",
+            "candidate_semantic_groups": ["page1", "page2"],
+        }]},
+    )
+
+    assert response.status_code == 409
+    assert "Resolve ambiguous document routing" in response.json()["detail"]
+
+
+def test_manual_routing_endpoint_returns_selected_semantic_group(monkeypatch):
+    classification = PageClassification(
+        page_number=2, document_type="commercial_invoice", document_family="ruspina_reinvoice_v1",
+        match_score=0.7, matched_anchors=("invoice_label",), reasons=("reviewer selected page2",),
+        routing_status="manually_resolved",
+    )
+    group = LogicalDocumentGroup("manual_page_2", (2,), "commercial_invoice", "ruspina_reinvoice_v1", (classification,))
+    processed = ProcessedLogicalDocument(group, _response("INV-TEST-002", 2))
+    monkeypatch.setattr(routes, "resolve_routing_page", lambda *args: processed)
+
+    response = TestClient(app).post("/resolve-dossier-routing", json={
+        "dossier_id": "synthetic-dossier", "physical_page": 2, "semantic_group": "page2",
+    })
+
+    assert response.status_code == 200
+    document = response.json()["logical_document"]
+    assert document["semantic_group"] == "page2"
+    assert document["routing_status"] == "manually_resolved"
+    assert document["document_family"] == "ruspina_reinvoice_v1"
+    assert document["page_classifications"][0]["semantic_group"] == "page2"
 
 
 @pytest.mark.parametrize(

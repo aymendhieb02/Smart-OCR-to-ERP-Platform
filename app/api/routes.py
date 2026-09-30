@@ -14,6 +14,8 @@ from app.core.schemas import (
     ERPFlatExport,
     ERPInvoiceJSON,
     DossierLogicalDocument,
+    DossierRoutingResolutionSubmission,
+    DossierRoutingReviewItem,
     DossierPageClassification,
     DossierReviewSummary,
     DossierReconciliationSubmission,
@@ -36,6 +38,7 @@ from app.services.ocr_engine import OCREngine
 from app.services.json_writer import write_erp_json, write_invoice_validation_report
 from app.services.pipeline_runner import process_dossier_file
 from app.services.dossier_segmentation import semantic_group_for_document
+from app.services.dossier_routing_review import register_routing_session, resolve_routing_page
 from app.services.simple_dossier_json import build_simple_dossier_output
 
 router = APIRouter()
@@ -110,6 +113,8 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
             persist_erp_json=False,
         )
         dossier_id = str(uuid.uuid4())
+        if result.routing_context is not None:
+            register_routing_session(dossier_id, result.routing_context)
         documents = [
             DossierLogicalDocument(
                 logical_document_id=f"{dossier_id}:{item.group.group_id}",
@@ -121,6 +126,7 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
                     item.group.document_type,
                     item.group.document_family,
                     tuple(anchor for classification in item.group.page_classifications for anchor in classification.matched_anchors),
+                    item.group.page_classifications[0].routing_status if item.group.page_classifications else "auto",
                 ),
                 physical_page_numbers=list(item.group.pages),
                 page_classifications=[
@@ -130,6 +136,7 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
                             classification.document_type,
                             classification.document_family,
                             classification.matched_anchors,
+                            classification.routing_status,
                         ),
                     )
                     for classification in item.group.page_classifications
@@ -141,13 +148,24 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
         statuses = [item.response.validation.status for item in result.logical_documents]
         valid_count = sum(status == "valid" for status in statuses)
         invalid_count = sum(status in {"invalid", "rejected"} for status in statuses)
-        needs_review_count = len(statuses) - valid_count - invalid_count
+        routing_review_items = [
+            DossierRoutingReviewItem(
+                physical_page=item.page_number,
+                current_generic_classification=item.document_type,
+                detected_family=item.document_family,
+                routing_status=item.routing_status,
+                candidate_semantic_groups=list(item.candidate_semantic_groups),
+            )
+            for item in result.page_classifications
+            if item.routing_status == "review_required"
+        ]
+        needs_review_count = len(statuses) - valid_count - invalid_count + len(routing_review_items)
         summary_status = "invalid" if invalid_count else "needs_review" if needs_review_count else "valid"
         return ProcessDossierResponse(
             dossier_id=dossier_id,
             source_file=result.source_file,
             page_count=result.page_count,
-            document_count=len(documents),
+            document_count=len(documents) + len(routing_review_items),
             summary=DossierReviewSummary(
                 status=summary_status,
                 valid_count=valid_count,
@@ -162,11 +180,13 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
                         classification.document_type,
                         classification.document_family,
                         classification.matched_anchors,
+                        classification.routing_status,
                     ),
                 )
                 for classification in result.page_classifications
             ],
             logical_documents=documents,
+            routing_review_items=routing_review_items,
             relationships=list(result.relationships),
             ocr_engine=result.ocr_engine,
             timings=result.timings,
@@ -182,10 +202,53 @@ async def process_dossier(file: UploadFile = File(...)) -> ProcessDossierRespons
             temp_path.unlink(missing_ok=True)
 
 
+@router.post("/resolve-dossier-routing")
+async def resolve_dossier_routing(payload: DossierRoutingResolutionSubmission) -> dict:
+    """Resolve an ambiguous page using the OCR evidence retained from upload."""
+    if payload.semantic_group not in {"page1", "page2", "page3"}:
+        raise HTTPException(status_code=422, detail="Choose a supported document type")
+    try:
+        processed = resolve_routing_page(
+            payload.dossier_id,
+            payload.physical_page,
+            payload.semantic_group,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    group = processed.group
+    document = DossierLogicalDocument(
+        logical_document_id=f"{payload.dossier_id}:{group.group_id}",
+        correction_document_id=processed.correction_document_id or f"{payload.dossier_id}:{group.group_id}",
+        document_index=group.pages[0],
+        document_type=group.document_type,
+        document_family=group.document_family,
+        semantic_group=payload.semantic_group,
+        routing_status="manually_resolved",
+        physical_page_numbers=list(group.pages),
+        page_classifications=[
+            DossierPageClassification(
+                **classification.__dict__,
+                semantic_group=payload.semantic_group,
+            )
+            for classification in group.page_classifications
+        ],
+        response=processed.response,
+    )
+    return {"logical_document": document.model_dump(mode="json"), "resolved_physical_page": payload.physical_page}
+
+
 @router.post("/export-simple-dossier-json", response_model=SimpleDossierOutput)
 async def export_simple_dossier_json(payload: SimpleDossierInput) -> SimpleDossierOutput:
     """Serialize the current dossier review payload without changing ERP export."""
-    return build_simple_dossier_output(payload)
+    if payload.routing_review_items:
+        raise HTTPException(status_code=409, detail="Resolve ambiguous document routing before exporting dossier JSON")
+    try:
+        return build_simple_dossier_output(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/demo-documents")

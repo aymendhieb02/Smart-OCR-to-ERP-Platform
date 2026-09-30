@@ -374,6 +374,11 @@ button:disabled {
 }
 
 .dossier-navigation { padding: 18px; }
+.routing-review-items { display: grid; gap: 12px; }
+.routing-review-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--warning-border, #d49a24); border-radius: 10px; background: var(--warning-soft, #fff8e7); }
+.routing-review-card h3, .routing-review-card p { margin: 0; }
+.routing-review-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.routing-review-controls select { min-width: 220px; }
 .dossier-heading { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .dossier-heading h2 { margin: 3px 0 0; }
 .dossier-counts, .dossier-summary { color: var(--muted); font-size: .9rem; }

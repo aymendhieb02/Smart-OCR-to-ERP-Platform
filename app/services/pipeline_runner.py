@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -59,6 +59,7 @@ from app.services.dossier_segmentation import (
 class ProcessedLogicalDocument:
     group: LogicalDocumentGroup
     response: ProcessInvoiceResponse
+    correction_document_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,16 @@ class DossierProcessResult:
     ocr_engine: str
     timings: dict
     relationships: tuple[DossierRelationship, ...] = ()
+    routing_context: "DossierRoutingContext | None" = None
+
+
+@dataclass(frozen=True)
+class DossierRoutingContext:
+    """Private in-memory evidence retained only while semantic routing is pending."""
+    document: LoadedDocument
+    ocr_result: OCRResult
+    timings: dict
+    source_digest: str | None = None
 
 
 def process_dossier_file(
@@ -188,8 +199,14 @@ def process_dossier_file(
                     timings.update(getattr(engine, "last_timings", {}))
                     page_classifications = classify_pages(ocr_result)
         groups = group_logical_documents(page_classifications)
+        review_groups = [
+            group for group in groups
+            if any(item.routing_status == "review_required" for item in group.page_classifications)
+        ]
         processed: list[ProcessedLogicalDocument] = []
         for group in groups:
+            if group in review_groups:
+                continue
             logical_document = _logical_loaded_document(document, group.pages)
             logical_ocr = _logical_ocr_result(ocr_result, group.pages)
             response = _process_ocr_document(
@@ -229,7 +246,83 @@ def process_dossier_file(
         ocr_engine=ocr_result.engine,
         timings=timings,
         relationships=reconcile_dossier(processed),
+        routing_context=(
+            DossierRoutingContext(
+                document=document,
+                ocr_result=ocr_result,
+                timings=dict(timings),
+                source_digest=correction_document_id(path, "").split(":", 1)[0],
+            )
+            if review_groups else None
+        ),
     )
+
+
+def process_routing_review_selection(
+    context: DossierRoutingContext,
+    physical_page: int,
+    semantic_group: str,
+) -> ProcessedLogicalDocument:
+    """Run the selected existing semantic pipeline on cached OCR evidence only."""
+    if semantic_group not in {"page1", "page2", "page3"}:
+        raise ValueError("Unsupported semantic group")
+    classification = next(
+        (item for item in classify_pages(context.ocr_result) if item.page_number == physical_page),
+        None,
+    )
+    if classification is None or classification.routing_status != "review_required":
+        raise ValueError("The requested physical page is not awaiting routing review")
+
+    document_type, family = {
+        "page1": ("commercial_invoice", GENERAL_PRODUCER_FAMILY),
+        "page2": ("commercial_invoice", "ruspina_reinvoice_v1"),
+        "page3": ("customs_declaration", "customs_tradenet_v1"),
+    }[semantic_group]
+    resolved_classification = replace(
+        classification,
+        document_type=document_type,
+        document_family=family,
+        routing_status="manually_resolved",
+        candidate_semantic_groups=(),
+        reasons=(*classification.reasons, f"reviewer selected {semantic_group}"),
+    )
+    group = LogicalDocumentGroup(
+        group_id=f"manual_page_{physical_page}",
+        pages=(physical_page,),
+        document_type=document_type,
+        document_family=family,
+        page_classifications=(resolved_classification,),
+    )
+    logical_document = _logical_loaded_document(context.document, group.pages)
+    logical_ocr = _logical_ocr_result(context.ocr_result, group.pages)
+    timings = dict(context.timings)
+    response = _process_ocr_document(
+        logical_document,
+        logical_ocr,
+        timings=timings,
+        include_preview=False,
+        persist_erp_json=False,
+        ocr_engine=None,
+        physical_page_numbers=group.pages,
+        document_family=family,
+        producer_invoice=semantic_group == "page1",
+        fixed_customs_form=semantic_group == "page3",
+    )
+    review_family = family
+    if document_type == "commercial_invoice" and family != "ruspina_reinvoice_v1":
+        review_family = family if family in PRODUCER_REVIEW_FIELDS else GENERAL_PRODUCER_FAMILY
+    document_id = f"{context.source_digest}:{group.group_id}" if context.source_digest else None
+    if document_id and review_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1", "ruspina_reinvoice_v1", *PRODUCER_REVIEW_FIELDS}:
+        _apply_family_review_corrections(
+            response,
+            load_review_field_corrections(document_id, review_family),
+            review_family,
+        )
+        _apply_producer_line_item_corrections(
+            response,
+            load_review_line_item_corrections(document_id, review_family),
+        )
+    return ProcessedLogicalDocument(group=group, response=response, correction_document_id=document_id)
 
 
 def _apply_family_review_corrections(
