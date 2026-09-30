@@ -391,7 +391,12 @@ function renderResults(data) {
   selectedPageWithinLogicalDocument = 0;
   renderDossierNavigation();
   renderDossierRelationships();
-  renderSelectedLogicalDocument(data);
+  if (dossierResponse.logical_documents.length) {
+    renderSelectedLogicalDocument(data);
+  } else if (dossierResponse.routing_review_items?.length) {
+    results.classList.remove("hidden");
+    document.getElementById("copySimpleDossierJsonBtn").disabled = true;
+  }
 }
 
 function renderSelectedLogicalDocument(rawResponse = dossierResponse) {
@@ -539,7 +544,7 @@ function summarizeLogicalDocuments(documents = dossierResponse?.logical_document
 function renderDossierNavigation() {
   if (!dossierResponse) return;
   const copySimpleJsonButton = document.getElementById("copySimpleDossierJsonBtn");
-  if (copySimpleJsonButton) copySimpleJsonButton.disabled = false;
+  if (copySimpleJsonButton) copySimpleJsonButton.disabled = Boolean(dossierResponse.routing_review_items?.length);
   const title = document.getElementById("dossierTitle");
   const counts = document.getElementById("dossierCounts");
   const summaryHost = document.getElementById("dossierSummary");
@@ -551,6 +556,7 @@ function renderDossierNavigation() {
     status: statusLabel(summary.status), valid: summary.valid_count || 0,
     review: summary.needs_review_count || 0, invalid: summary.invalid_count || 0,
   });
+  renderRoutingReviewItems();
   if (!tabs) return;
   tabs.innerHTML = "";
   (dossierResponse.logical_documents || []).forEach((logicalDocument, index) => {
@@ -574,6 +580,104 @@ function renderDossierNavigation() {
     button.addEventListener("keydown", (event) => handleDocumentTabKeydown(event, index));
     tabs.appendChild(button);
   });
+}
+
+function renderRoutingReviewItems() {
+  const host = document.getElementById("routingReviewItems");
+  if (!host) return;
+  host.replaceChildren();
+  (dossierResponse?.routing_review_items || []).forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "routing-review-card";
+    const heading = document.createElement("h3");
+    heading.textContent = t("routing.title", { page: item.physical_page });
+    const description = document.createElement("p");
+    description.textContent = t("routing.description");
+    const preview = (dossierResponse.document_preview?.pages || []).find(
+      (page) => normalizePage(page.page) === normalizePage(item.physical_page)
+    );
+    if (preview?.url) {
+      const link = document.createElement("a");
+      link.href = new URL(preview.url, window.location.origin).href;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = t("routing.view_page");
+      card.append(heading, description, link);
+    } else {
+      card.append(heading, description);
+    }
+    const controls = document.createElement("div");
+    controls.className = "routing-review-controls";
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", t("routing.choose_type"));
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = t("routing.choose_type");
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+    for (const [group, key] of [
+      ["page1", "routing.supplier_invoice"],
+      ["page2", "routing.ruspina_invoice"],
+      ["page3", "routing.customs_document"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = group;
+      option.textContent = t(key);
+      select.appendChild(option);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "primary small";
+    button.textContent = t("routing.confirm");
+    button.addEventListener("click", () => resolveRoutingPage(item.physical_page, select.value, button));
+    controls.append(select, button);
+    card.appendChild(controls);
+    host.appendChild(card);
+  });
+}
+
+async function resolveRoutingPage(physicalPage, semanticGroup, button) {
+  if (!semanticGroup || !dossierResponse?.dossier_id) return;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = t("routing.processing");
+  try {
+    const response = await fetch("/resolve-dossier-routing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dossier_id: dossierResponse.dossier_id,
+        physical_page: physicalPage,
+        semantic_group: semanticGroup,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      const message = response.status === 410 ? t("routing.expired") : (payload.detail || t("routing.failed"));
+      throw new Error(message);
+    }
+    const logicalDocument = payload.logical_document;
+    dossierResponse.logical_documents = [...(dossierResponse.logical_documents || []), logicalDocument]
+      .sort((left, right) => Math.min(...left.physical_page_numbers) - Math.min(...right.physical_page_numbers));
+    dossierResponse.routing_review_items = (dossierResponse.routing_review_items || [])
+      .filter((item) => normalizePage(item.physical_page) !== normalizePage(physicalPage));
+    dossierResponse.page_classifications = (dossierResponse.page_classifications || []).map((item) => {
+      const resolved = logicalDocument.page_classifications.find((entry) => entry.page_number === item.page_number);
+      return resolved || item;
+    });
+    selectedLogicalDocumentIndex = dossierResponse.logical_documents.indexOf(logicalDocument);
+    selectedPageWithinLogicalDocument = 0;
+    currentPageIndex = Math.max(0, normalizePage(physicalPage) - 1);
+    renderDossierNavigation();
+    renderDossierRelationships();
+    renderSelectedLogicalDocument(dossierResponse);
+    hideError();
+  } catch (error) {
+    showError(error.message || t("routing.failed"));
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function handleDocumentTabKeydown(event, index) {

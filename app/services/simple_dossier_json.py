@@ -38,13 +38,20 @@ PRODUCER_ALIASES = {
 
 def build_simple_dossier_output(dossier_result: Any) -> SimpleDossierOutput:
     """Build exactly page1/page2/page3 using the currently effective review values."""
+    if _value(dossier_result, "routing_review_items") or any(
+        _value(item, "routing_status") == "review_required" for item in _documents(dossier_result)
+    ):
+        raise ValueError("Resolve ambiguous document routing before exporting dossier JSON")
     routed: dict[str, list[tuple[int, Any, str | None]]] = defaultdict(list)
     for item in _documents(dossier_result):
         group = _value(item, "group")
         document_type = _value(item, "document_type") or _value(group, "document_type")
         document_family = _value(item, "document_family") or _value(group, "document_family")
         anchors = _classification_anchors(item)
-        semantic_group = semantic_group_for_document(document_type or "unknown", document_family, anchors)
+        semantic_group = semantic_group_for_document(
+            document_type or "unknown", document_family, anchors,
+            _value(item, "routing_status") or "auto",
+        )
         if semantic_group is None:
             continue
         page_numbers = _value(item, "physical_page_numbers")

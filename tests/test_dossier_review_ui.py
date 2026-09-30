@@ -89,6 +89,18 @@ def test_dossier_summary_relationships_and_localization_are_present():
         assert STRINGS.count(f'"{key}"') == 2
 
 
+def test_ambiguous_routing_review_is_explicit_localized_and_blocks_json_copy():
+    assert 'id="routingReviewItems"' in HTML
+    assert 'fetch("/resolve-dossier-routing"' in APP_JS
+    assert 'routing_review_items' in APP_JS
+    assert 'copySimpleJsonButton.disabled = Boolean(dossierResponse.routing_review_items?.length)' in APP_JS
+    for key in (
+        "routing.title", "routing.description", "routing.choose_type", "routing.supplier_invoice",
+        "routing.ruspina_invoice", "routing.customs_document", "routing.confirm", "routing.view_page",
+    ):
+        assert STRINGS.count(f'"{key}"') == 2
+
+
 def test_business_logic_does_not_depend_on_translated_document_labels():
     assert 'presentation.labelKey' in APP_JS
     assert 'document.document_family' in APP_JS

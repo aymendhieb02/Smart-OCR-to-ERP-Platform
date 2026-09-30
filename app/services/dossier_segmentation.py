@@ -16,6 +16,8 @@ class PageClassification:
     matched_anchors: tuple[str, ...]
     reasons: tuple[str, ...]
     starts_new_document: bool = True
+    routing_status: str = "auto"
+    candidate_semantic_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,11 +188,17 @@ def classify_page(lines: list[OCRLine], page_number: int) -> PageClassification:
         )
     invoice_form_matches = _generic_invoice_form_signals(page_lines, match_text)
     if invoice_matches and invoice_form_matches:
+        routing_status, candidate_groups, routing_reasons = _commercial_routing_review_signals(page_lines)
         return PageClassification(
             page_number, "commercial_invoice", None,
             round(min(0.79, 0.45 + len(invoice_form_matches) * 0.05), 3),
             tuple(dict.fromkeys(("invoice_label", *invoice_matches, *invoice_form_matches))),
-            ("general supplier invoice has multiple independent invoice-form signals",),
+            (
+                "general supplier invoice has multiple independent invoice-form signals",
+                *routing_reasons,
+            ),
+            routing_status=routing_status,
+            candidate_semantic_groups=candidate_groups,
         )
     return PageClassification(
         page_number, "unknown", None, 0.0, (),
@@ -202,8 +210,11 @@ def semantic_group_for_document(
     document_type: str,
     document_family: str | None,
     matched_anchors: tuple[str, ...] | list[str] = (),
+    routing_status: str = "auto",
 ) -> str | None:
     """Map classification evidence to a semantic output group, never by page index."""
+    if routing_status == "review_required":
+        return None
     if document_family == "ruspina_reinvoice_v1":
         return "page2"
     if document_family in {"customs_tradenet_v1", "customs_douanes_tunisiennes_v1"}:
@@ -219,6 +230,47 @@ def semantic_group_for_document(
         ):
             return "page1"
     return None
+
+
+def _commercial_routing_review_signals(
+    lines: list[OCRLine],
+) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Recognize unresolved commercial pages with both cargo and payment structure."""
+    normalized = [_matching_text(line.text) for line in lines if line.text.strip()]
+    joined = "\n".join(normalized)
+    cargo_groups = {
+        "weight": bool(re.search(
+            r"\b(?:gross|net)\s+weight\b|\bpoids\s+(?:brut|net)\b|الوزن\s*(?:الصافي|الإجمالي|الاجمالي|الخام)", joined,
+        )),
+        "packages": bool(re.search(
+            r"\b(?:number\s+of\s+)?(?:bags|packages|parcels|colis|cartons|palettes)\b|(?:عدد\s*)?(?:الأكياس|الاكياس|الطرود|العبوات|الأجولة|الاجولة)", joined,
+        )),
+        "delivery": bool(re.search(
+            r"\b(?:delivery|livraison|incoterm|ex\s+w(?:orks)?)\b|(?:التسليم|التوصيل|شروط\s+التسليم)", joined,
+        )),
+        "origin": bool(re.search(
+            r"\b(?:country\s+of\s+origin|origin|provenance)\b|(?:بلد\s+المنشأ|المنشأ|المصدر)", joined,
+        )),
+        "shipment": bool(re.search(
+            r"\b(?:shipment|consignee|destinataire|expedition)\b|(?:الشحن|المرسل\s+إليه|المرسل\s+اليه)", joined,
+        )),
+    }
+    financial_groups = {
+        "payment": bool(re.search(
+            r"\b(?:payment|payment\s+terms|bank\s+transfer|transfer|reglement|paiement)\b|(?:الدفع|السداد|طريقة\s+الدفع)", joined,
+        )),
+        "banking": bool(re.search(r"\b(?:bank|banque|iban|swift|bic|rib)\b|(?:البنك|المصرف|حساب\s+مصرفي)", joined)),
+    }
+    cargo_count = sum(cargo_groups.values())
+    financial_count = sum(financial_groups.values())
+    if cargo_count >= 2 and financial_count >= 1:
+        matched = [name for name, present in (*cargo_groups.items(), *financial_groups.items()) if present]
+        return (
+            "review_required",
+            ("page1", "page2"),
+            ("unresolved commercial page combines cargo/logistics and payment/banking structure: " + ", ".join(matched),),
+        )
+    return "auto", (), ()
 
 
 def _ruspina_form_signals(lines: list[OCRLine]) -> tuple[str, ...]:

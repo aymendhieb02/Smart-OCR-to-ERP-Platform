@@ -417,10 +417,26 @@ class DossierPageClassification(BaseModel):
     document_type: str
     document_family: str | None = None
     semantic_group: str | None = None
+    routing_status: str = "auto"
+    candidate_semantic_groups: list[str] = Field(default_factory=list)
     match_score: float = 0.0
     matched_anchors: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     starts_new_document: bool = True
+
+
+class DossierRoutingReviewItem(BaseModel):
+    physical_page: int
+    current_generic_classification: str
+    detected_family: str | None = None
+    routing_status: str = "review_required"
+    candidate_semantic_groups: list[str] = Field(default_factory=list)
+
+
+class DossierRoutingResolutionSubmission(BaseModel):
+    dossier_id: str
+    physical_page: int
+    semantic_group: str
 
 
 class DossierLogicalDocument(BaseModel):
@@ -430,6 +446,7 @@ class DossierLogicalDocument(BaseModel):
     document_type: str
     document_family: str | None = None
     semantic_group: str | None = None
+    routing_status: str = "auto"
     physical_page_numbers: list[int] = Field(default_factory=list)
     page_classifications: list[DossierPageClassification] = Field(default_factory=list)
     response: ProcessInvoiceResponse
@@ -464,6 +481,7 @@ class ProcessDossierResponse(BaseModel):
     document_preview: DocumentPreview
     page_classifications: list[DossierPageClassification] = Field(default_factory=list)
     logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)
+    routing_review_items: list[DossierRoutingReviewItem] = Field(default_factory=list)
     relationships: list[DossierRelationship] = Field(default_factory=list)
     ocr_engine: str
     timings: dict[str, Any] = Field(default_factory=dict)
@@ -516,7 +534,9 @@ class SimpleDossierOutput(BaseModel):
 
 
 class SimpleDossierInput(BaseModel):
+    dossier_id: str | None = None
     logical_documents: list[DossierLogicalDocument] = Field(default_factory=list)
+    routing_review_items: list[DossierRoutingReviewItem] = Field(default_factory=list)
 
 
 class DossierReconciliationSubmission(BaseModel):
