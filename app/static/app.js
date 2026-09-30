@@ -882,9 +882,114 @@ function renderFields(fields) {
       }
       value.appendChild(evidence);
     }
+    if (field === "address" && presentation.key === "ruspina_reinvoice_v1"
+        && getSelectedLogicalDocument()?.semantic_group === "page2") {
+      value.appendChild(renderRuspinaAddressReread(input, detail));
+    }
     table.append(key, value);
     });
   });
+}
+
+function renderRuspinaAddressReread(input, detail) {
+  const host = document.createElement("div");
+  host.className = "field-reread-action";
+  const rereadButton = document.createElement("button");
+  rereadButton.type = "button";
+  rereadButton.className = "ghost small";
+  rereadButton.textContent = t("review.reread_address");
+  rereadButton.addEventListener("click", async () => {
+    if (!selectedFile) {
+      showRuspinaRereadMessage(host, t("review.reread_file_missing"));
+      return;
+    }
+    const logicalDocument = getSelectedLogicalDocument();
+    const context = {
+      semantic_group: logicalDocument?.semantic_group,
+      document_family: logicalDocument?.document_family,
+      field: "address",
+      page: normalizePage(detail?.page || logicalDocument?.physical_page_numbers?.[0]),
+      label_line_index: detail?.line_index ?? null,
+      current_value: input.value || null,
+      current_confidence: detail?.confidence ?? null,
+      current_source: detail?.source ?? null,
+      field_bbox: detail?.bbox ?? null,
+      page_width: detail?.page_width ?? null,
+      page_height: detail?.page_height ?? null,
+      ocr_blocks: lastResponse?.all_ocr_blocks?.length ? lastResponse.all_ocr_blocks : (lastResponse?.ocr_blocks || []),
+    };
+    rereadButton.disabled = true;
+    rereadButton.textContent = t("review.reread_processing");
+    host.querySelector(".field-reread-panel")?.remove();
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("context_json", JSON.stringify(context));
+      const response = await fetch("/review/ruspina-address/reread", { method: "POST", body: formData });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || t("review.reread_failed"));
+      renderRuspinaRereadComparison(host, input, data);
+    } catch (error) {
+      showRuspinaRereadMessage(host, error.message || t("review.reread_failed"));
+    } finally {
+      rereadButton.disabled = false;
+      rereadButton.textContent = t("review.reread_address");
+    }
+  });
+  host.appendChild(rereadButton);
+  return host;
+}
+
+function renderRuspinaRereadComparison(host, input, proposal) {
+  const panel = document.createElement("div");
+  panel.className = "field-reread-panel";
+  const current = document.createElement("div");
+  const currentLabel = document.createElement("strong");
+  currentLabel.textContent = t("review.reread_current");
+  const currentValue = document.createElement("span");
+  currentValue.textContent = proposal.current_value || "-";
+  current.append(currentLabel, currentValue);
+  const reread = document.createElement("div");
+  const rereadLabel = document.createElement("strong");
+  rereadLabel.textContent = t("review.reread_proposal");
+  const rereadValue = document.createElement("span");
+  rereadValue.textContent = proposal.reread_value || t("review.reread_empty");
+  reread.append(rereadLabel, rereadValue);
+  const actions = document.createElement("div");
+  actions.className = "field-reread-actions";
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "small";
+  accept.textContent = t("review.reread_accept");
+  accept.disabled = !proposal.reread_value;
+  accept.addEventListener("click", async () => {
+    const value = String(proposal.reread_value || "").trim();
+    if (!value) return;
+    clearTimeout(autoValidationTimer);
+    input.value = value;
+    updateReviewField("address", value);
+    clearTimeout(autoValidationTimer);
+    correctedFields.address.source = "targeted OCR accepted by reviewer";
+    correctedFields.address.user_action = "accepted";
+    panel.remove();
+    await validateCorrections({ automatic: false, reason: "targeted_ocr_accept" });
+  });
+  const keep = document.createElement("button");
+  keep.type = "button";
+  keep.className = "ghost small";
+  keep.textContent = t("review.reread_keep");
+  keep.addEventListener("click", () => panel.remove());
+  actions.append(accept, keep);
+  panel.append(current, reread, actions);
+  host.appendChild(panel);
+}
+
+function showRuspinaRereadMessage(host, message) {
+  const panel = document.createElement("div");
+  panel.className = "field-reread-panel warning-note";
+  panel.textContent = message;
+  host.querySelector(".field-reread-panel")?.remove();
+  host.appendChild(panel);
 }
 
 function producerVisibleReviewGroups(presentation, fields) {

@@ -60,6 +60,45 @@ def build_label_value_region(
     return OCRRegion(name, image[top:bottom, left:right], left, top, (left, top, right, bottom))
 
 
+def build_ruspina_address_region(image: np.ndarray, label_bbox, field_bbox, *, page_width: int, page_height: int) -> OCRRegion | None:
+    """Crop the detected RUSPINA address row, retaining its label as context."""
+    height, width = image.shape[:2]
+    if min(height, width, page_width, page_height) < 1 or label_bbox is None or field_bbox is None:
+        return None
+    scale_x = width / float(page_width)
+    scale_y = height / float(page_height)
+    label = (
+        float(label_bbox.x1) * scale_x, float(label_bbox.y1) * scale_y,
+        float(label_bbox.x2) * scale_x, float(label_bbox.y2) * scale_y,
+    )
+    field = (
+        float(field_bbox.x1) * scale_x, float(field_bbox.y1) * scale_y,
+        float(field_bbox.x2) * scale_x, float(field_bbox.y2) * scale_y,
+    )
+    label_center_y = (label[1] + label[3]) / 2
+    field_center_y = (field[1] + field[3]) / 2
+    if abs(label_center_y - field_center_y) > height * 0.035:
+        return None
+
+    row_top = min(label[1], field[1])
+    row_bottom = max(label[3], field[3])
+    row_height = max(1.0, row_bottom - row_top)
+    vertical_padding = max(row_height * 1.2, height * 0.012)
+    top = max(0, int(round(row_top - vertical_padding)))
+    bottom = min(height, int(round(row_bottom + vertical_padding)))
+    max_band = max(int(round(height * 0.075)), int(round(row_height * 2.5)))
+    if bottom - top > max_band:
+        center_y = (row_top + row_bottom) / 2
+        top = max(0, int(round(center_y - max_band / 2)))
+        bottom = min(height, top + max_band)
+
+    left = max(0, int(round(label[0] - width * 0.012)))
+    right = min(width, int(round(width * 0.985)))
+    if right - left < width * 0.12 or bottom <= top:
+        return None
+    return OCRRegion("ruspina_address", image[top:bottom, left:right], left, top, (left, top, right, bottom))
+
+
 def build_tradenet_ocr_regions(image: np.ndarray) -> list[OCRRegion]:
     """Small, normalized crops for the recurring TradeNet declaration form."""
     return [

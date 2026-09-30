@@ -604,6 +604,35 @@ button:disabled {
   gap: 8px;
 }
 
+.field-reread-action {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.field-reread-panel {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 13px;
+}
+
+.field-reread-panel > div:not(.field-reread-actions) {
+  display: grid;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.field-reread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .candidate-fallback {
   display: grid;
   gap: 6px;
