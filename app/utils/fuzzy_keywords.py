@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
-from functools import lru_cache
 from typing import Iterable
 
 from app.utils.helpers import strip_accents
+from app.services.matching_cache import hashed_memoized, memoized
 
 try:  # rapidfuzz is preferred, but fuzzy matching must remain defensive.
     from rapidfuzz import fuzz  # type: ignore
@@ -41,6 +41,10 @@ def _exact_keyword_match(text: str, keyword: str) -> bool:
 
 
 def _fuzzy_keyword_match(text: str, keyword: str, *, threshold: int) -> bool:
+    return hashed_memoized(("fuzzy_match", text, keyword, threshold), lambda: _fuzzy_keyword_match_uncached(text, keyword, threshold=threshold))
+
+
+def _fuzzy_keyword_match_uncached(text: str, keyword: str, *, threshold: int) -> bool:
     tokens = _candidate_tokens(text, keyword)
     if not tokens:
         return False
@@ -65,6 +69,10 @@ def _candidate_tokens(text: str, keyword: str) -> list[str]:
 
 
 def _score(value: str, keyword: str) -> float:
+    return hashed_memoized(("fuzzy_score", value, keyword), lambda: _score_uncached(value, keyword))
+
+
+def _score_uncached(value: str, keyword: str) -> float:
     value = _normalize_ocr_confusions(value)
     keyword = _normalize_ocr_confusions(keyword)
     if fuzz is not None:
@@ -82,8 +90,11 @@ def _adjusted_threshold(keyword: str, threshold: int) -> int:
     return min(threshold, 82)
 
 
-@lru_cache(maxsize=4096)
 def _normalize(value: str) -> str:
+    return memoized(("fuzzy_normalize", value), lambda: _normalize_uncached(value))
+
+
+def _normalize_uncached(value: str) -> str:
     value = strip_accents(value or "").lower()
     value = value.replace("œ", "oe").replace("æ", "ae")
     return re.sub(r"\s+", " ", value).strip()

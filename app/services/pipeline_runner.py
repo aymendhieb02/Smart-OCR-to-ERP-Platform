@@ -46,6 +46,7 @@ from app.services.duplicate_detector import detect_duplicates
 from app.services.fraud_indicators import detect_fraud_indicators
 from app.services.invoice_validation_report import build_invoice_validation_report
 from app.services.performance_timer import PipelineTimer
+from app.services.matching_cache import with_matching_cache
 from app.services.review_assistant import build_review_assistant
 from app.services.dossier_segmentation import (
     LogicalDocumentGroup,
@@ -84,6 +85,7 @@ class DossierRoutingContext:
     source_digest: str | None = None
 
 
+@with_matching_cache
 def process_dossier_file(
     path: Path,
     *,
@@ -258,6 +260,7 @@ def process_dossier_file(
     )
 
 
+@with_matching_cache
 def process_routing_review_selection(
     context: DossierRoutingContext,
     physical_page: int,
@@ -445,6 +448,7 @@ def _semantic_processing_classification(classification, document_family: str | N
     return classification
 
 
+@with_matching_cache
 def process_document_file(
     path: Path,
     *,
@@ -476,6 +480,7 @@ def process_document_file(
         return _process_ocr_document(document, ocr_result, timings=timings, include_preview=include_preview, persist_erp_json=persist_erp_json, ocr_engine=engine, timing_recorder=timer)
 
 
+@with_matching_cache
 def process_loaded_document(
     *,
     document,
