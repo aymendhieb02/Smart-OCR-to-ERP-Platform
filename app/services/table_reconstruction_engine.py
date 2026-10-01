@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.core.schemas import BoundingBox, LineItem, OCRLine
+from app.services.matching_cache import hashed_memoized, memoized
 from app.utils.helpers import parse_amount, strip_accents
 
 
@@ -1475,6 +1476,10 @@ def _matched_aliases(text: str) -> dict[str, list[str]]:
 
 
 def _best_alias_match(norm: str, aliases: tuple[str, ...]) -> tuple[str, int] | None:
+    return hashed_memoized(("table_alias", norm, aliases), lambda: _best_alias_match_uncached(norm, aliases))
+
+
+def _best_alias_match_uncached(norm: str, aliases: tuple[str, ...]) -> tuple[str, int] | None:
     hits = []
     for alias in sorted(aliases, key=len, reverse=True):
         normalized = _norm(alias)
@@ -1656,4 +1661,8 @@ def _cluster_values(values: list[float], tolerance: float) -> list[list[float]]:
 
 
 def _norm(text: str) -> str:
+    return memoized(("table_norm", text), lambda: _norm_uncached(text))
+
+
+def _norm_uncached(text: str) -> str:
     return " ".join(re.sub(r"[^0-9a-z\u0600-\u06ff.%]+", " ", strip_accents(str(text)).casefold()).split())

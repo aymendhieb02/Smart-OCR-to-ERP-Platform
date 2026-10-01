@@ -47,7 +47,7 @@ SOURCE_KEYS = {
     "total_ht": ("total_ht",),
     "hs_code": ("hs_code", "tariff_position", "position_tarifaire"),
     "incoterm": ("incoterm", "delivery"),
-    "bank_account": ("bank_account", "supplier_bank_rib"),
+    "bank_account": ("bank_account", "supplier_bank_rib", "bank_rib"),
     "iban": ("iban", "bank_iban", "supplier_bank_iban"),
     "swift": ("swift", "bank_swift", "supplier_bank_swift"),
     "number_of_bags": ("number_of_bags",),

@@ -182,6 +182,8 @@ Typical reasons for review:
 - incomplete line item rows;
 - conflicting candidate values.
 
+OCR confidence is not true accuracy; accuracy must be measured against human-verified ground truth.
+
 Only validated corrected data should be exported.
 
 ## Docker
