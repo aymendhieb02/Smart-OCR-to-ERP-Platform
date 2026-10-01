@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from app.core.schemas import BoundingBox, FieldExtractionDetail, ProcessInvoiceResponse
-from app.utils.helpers import parse_amount, parse_date
+from app.utils.helpers import parse_amount, parse_date, strip_accents
 from app.services.table_regions import build_label_value_region
 
 ENFIDHA_FAMILY = "ciments_enfidha_invoice_v1"
@@ -658,6 +658,13 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
                     amount = parse_amount(re.sub(r"[^\d,.+\-]", "", value))
                     if amount is None:
                         continue
+                    if field_name == "total":
+                        amount_peer = _right_aligned_total_peer(lines, line)
+                        if amount_peer is not None:
+                            value, paired_line = amount_peer
+                            amount = parse_amount(re.sub(r"[^\d,.+\-]", "", value))
+                            if amount is None:
+                                continue
                     evidence_line = paired_line or line
                     evidence_source = str(getattr(evidence_line, "source", "") or "")
                     source = (
@@ -774,6 +781,7 @@ def _nearest_labeled_value(lines: list, label, field_name: str | None = None) ->
         return None
     height = max(12.0, box.y2 - box.y1)
     candidates = []
+    amount_column = _commercial_amount_column(lines, label) if field_name == "total" else None
     for line in lines:
         other = getattr(line, "bbox", None)
         text = str(getattr(line, "text", "") or "").strip()
@@ -784,19 +792,82 @@ def _nearest_labeled_value(lines: list, label, field_name: str | None = None) ->
         if re.match(r"\s*:?\s*(?:invoice|facture|date|client|customer|buyer|adresse|address|consignee|dest|total|hs\s*code|payment|paiement|origin|destination|incoterm|shipment|taux|position|packaging|emballage|matricule|fiscal|r\.?c\.?)\b", text, re.I):
             continue
         center_gap_y = abs(((box.y1 + box.y2) / 2) - ((other.y1 + other.y2) / 2))
-        if center_gap_y > max(38.0, height * 1.8) or other.x1 < box.x1 - 12:
+        vertical_limit = max(50.0, height * 2.5) if field_name == "total" else max(38.0, height * 1.8)
+        if center_gap_y > vertical_limit or other.x1 < box.x1 - 12:
             continue
-        right_bias = -((other.x1 + other.x2) / 2) * 0.035 if field_name == "total" else 0
+        column_distance = 0.0
+        if amount_column is not None:
+            value_center_x = (other.x1 + other.x2) / 2
+            column_distance = abs(value_center_x - amount_column)
+            if column_distance > max(80.0, height * 8.0):
+                continue
+        right_bias = -((other.x1 + other.x2) / 2) * 0.035 if field_name == "total" and amount_column is None else 0
         horizontal_gap = max(0.0, other.x1 - box.x2, box.x1 - other.x2)
         horizontal_alignment_penalty = horizontal_gap * 0.1 if field_name == "total_amount_words" else 0.0
-        score = center_gap_y + abs(other.x1 - box.x2) * 0.01 + right_bias + horizontal_alignment_penalty
+        score = center_gap_y + abs(other.x1 - box.x2) * 0.01 + right_bias + horizontal_alignment_penalty + column_distance
         if field_name == "total_amount_words" and ((other.y1 + other.y2) / 2) <= ((box.y1 + box.y2) / 2):
             continue
         candidates.append((score, text, line))
     if not candidates:
         return None
-    if field_name == "total":
+    if field_name == "total" and amount_column is None:
         _score, text, line = max(candidates, key=lambda item: (item[2].bbox.x1 + item[2].bbox.x2, -item[0]))
     else:
         _score, text, line = min(candidates, key=lambda item: item[0])
     return text, line
+
+
+def _commercial_amount_column(lines: list, label) -> float | None:
+    label_box = getattr(label, "bbox", None)
+    label_page = getattr(label, "page_number", None)
+    if label_box is None:
+        return None
+    headers = []
+    for line in lines:
+        box = getattr(line, "bbox", None)
+        text = str(getattr(line, "text", "") or "")
+        if box is None or getattr(line, "page_number", label_page) != label_page:
+            continue
+        plain = strip_accents(text).lower()
+        if box.y2 >= label_box.y1:
+            continue
+        if re.search(r"\b(?:amount|line\s*total|extended(?:\s+price)?|net\s+amount)\b", plain):
+            headers.append((box.y2, (box.x1 + box.x2) / 2))
+    return max(headers, default=(None, None), key=lambda item: item[0] or float("-inf"))[1]
+
+
+def _right_aligned_total_peer(lines: list, label) -> tuple[str, object] | None:
+    box = getattr(label, "bbox", None)
+    page = getattr(label, "page_number", None)
+    if box is None:
+        return None
+    height = max(12.0, box.y2 - box.y1)
+    amount_column = _commercial_amount_column(lines, label)
+    candidates = []
+    for line in lines:
+        other = getattr(line, "bbox", None)
+        text = str(getattr(line, "text", "") or "").strip()
+        if line is label or other is None or getattr(line, "page_number", page) != page:
+            continue
+        amount = parse_amount(re.sub(r"[^\d,.+\-]", "", text))
+        if amount is None or other.x1 <= box.x2 + 8:
+            continue
+        vertical_gap = abs(((box.y1 + box.y2) / 2) - ((other.y1 + other.y2) / 2))
+        if vertical_gap > max(50.0, height * 2.5):
+            continue
+        center_x = (other.x1 + other.x2) / 2
+        if amount_column is not None:
+            distance = abs(center_x - amount_column)
+            if distance > max(80.0, height * 8.0):
+                continue
+            score = vertical_gap + distance
+        else:
+            score = vertical_gap - center_x * 0.001
+        candidates.append((score, center_x, text, line))
+    if not candidates:
+        return None
+    if amount_column is not None:
+        _score, _center, value, line = min(candidates, key=lambda item: item[0])
+    else:
+        _score, _center, value, line = max(candidates, key=lambda item: item[1])
+    return value, line

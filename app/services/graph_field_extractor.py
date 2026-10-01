@@ -9,7 +9,7 @@ from app.services.semantic_classifier import classify_graph_nodes, is_company_ca
 from app.utils.helpers import parse_amount, parse_date, strip_accents
 
 DATE_PATTERN = r"\b(\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2})\b"
-AMOUNT_PATTERN = r"(?<!\d)(?:[$€£]\s*)?[-+]?(?:\d[\d ]*[,.]\d{2,3}|\d{1,3}(?:[ .]\d{3})+|\d+)(?!\d)"
+AMOUNT_PATTERN = r"(?<!\d)(?:[$€£]\s*)?[-+]?(?:\d{1,3}(?:[ ,.\u00a0]\d{3})+(?:[,.]\d{2,3})?|\d[\d ]*[,.]\d{2,3}|\d+)(?!\d)"
 CUSTOMER_LABEL_TYPES = {"customer_label"}
 INVOICE_LABEL_TYPES = {"invoice_label"}
 DUE_LABEL_TYPES = {"due_date_label"}
@@ -249,16 +249,39 @@ def _best_amount_for_label(graph: DocumentGraph, label: DocumentNode) -> float |
     inline_amounts = [amount for amount in inline_amounts if rate is None or abs(amount - rate) > 0.001]
     if inline_amounts:
         return inline_amounts[-1]
-    options: list[tuple[float, float]] = []
-    for node, distance, relation_bonus in _nearby_value_nodes(graph, label, max_distance=260):
+    is_total = label.node_type in TOTAL_LABEL_TYPES
+    if is_total and label.bbox:
+        tolerance = max(50.0, (label.bbox.y2 - label.bbox.y1) * 2.5)
+        aligned_amounts = []
+        for node in graph.nodes:
+            if node.id == label.id or node.page != label.page or node.node_type != "amount" or not node.bbox:
+                continue
+            vertical_gap = abs(
+                (label.bbox.y1 + label.bbox.y2) / 2
+                - (node.bbox.y1 + node.bbox.y2) / 2
+            )
+            if vertical_gap > tolerance:
+                continue
+            amounts = _extract_amounts(node.text)
+            if amounts:
+                aligned_amounts.append((node.bbox.x1 + node.bbox.x2, amounts[-1]))
+        if aligned_amounts:
+            return max(aligned_amounts, key=lambda item: item[0])[1]
+    options: list[tuple[float, float, DocumentNode]] = []
+    nearby = _nearby_value_nodes(graph, label, max_distance=260)
+    for node, distance, relation_bonus in nearby:
         if node.node_type in {"address_candidate", "table_header", "table_row_text", "random_noise"}:
+            continue
+        if is_total and node.node_type != "amount":
             continue
         amounts = _extract_amounts(node.text)
         if not amounts:
             continue
         penalty = distance * 0.01 - relation_bonus
-        options.append((penalty, amounts[-1]))
-    return sorted(options, key=lambda item: item[0])[0][1] if options else None
+        options.append((penalty, amounts[-1], node))
+    if not options:
+        return None
+    return sorted(options, key=lambda item: item[0])[0][1]
 
 
 def _nearby_value_nodes(graph: DocumentGraph, label: DocumentNode, max_distance: float) -> list[tuple[DocumentNode, float, float]]:
