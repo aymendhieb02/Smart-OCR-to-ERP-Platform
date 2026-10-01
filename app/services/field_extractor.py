@@ -1134,17 +1134,27 @@ def _looks_like_table_row(text: str) -> bool:
 
 def _collect_labeled_amounts(text: str) -> dict[str, float | str | None]:
     result: dict[str, float | str | None] = {"amount_ht": None, "tva_amount": None, "amount_ttc": None, "tax_rate": None, "currency": None}
+    currency_rank = (-1, -1)
     for line in text.splitlines():
         clean = _clean_name(line)
         plain = strip_accents(clean).lower()
         if not clean:
             continue
+        currency = _extract_currency(clean)
+        if currency:
+            bank_context = any(word in plain for word in ("iban", "rib", "bank", "banque", "swift", "account"))
+            commercial_context = any(word in plain for word in (
+                "price", "prix", "amount", "montant", "total", "subtotal", "invoice", "ttc", "ht",
+            ))
+            has_row_amounts = bool(re.search(AMOUNT_VALUE, clean)) and not bank_context
+            rank = (0 if bank_context else 3 if commercial_context else 2 if has_row_amounts else 1, -len(clean))
+            if rank > currency_rank:
+                currency_rank = rank
+                result["currency"] = currency
         amounts = [parse_amount(amount) for amount in re.findall(AMOUNT_VALUE, clean)]
         amounts = [amount for amount in amounts if amount is not None]
         if not amounts:
             continue
-        if result["currency"] is None:
-            result["currency"] = _extract_currency(clean)
         if any(word in plain for word in ("subtotal", "sous-total", "total ht", "htva", "net worth", "hors taxe")):
             result["amount_ht"] = amounts[-1]
         elif any(word in plain for word in ("tva", "vat", "sales tax", "tax amount")):
@@ -1408,15 +1418,28 @@ def _select_currency_candidate(values: list[Candidate]) -> Candidate:
     representatives: dict[str, Candidate] = {}
     for candidate in values:
         value = str(candidate.value).upper()
-        context_bonus = 0.20 if "total" in candidate.source.lower() else 0.0
-        grouped[value] = grouped.get(value, 0.0) + candidate.score + context_bonus
+        context = strip_accents(str(candidate.evidence_text or "")).lower()
+        bank_context = any(word in context for word in ("iban", "rib", "bank", "banque", "swift", "account", "capital", "r.c"))
+        commercial_context = any(word in context for word in (
+            "price", "prix", "amount", "montant", "total", "subtotal", "invoice", "ttc", "ht", "euro",
+        ))
+        adjusted_score = candidate.score
+        if bank_context:
+            adjusted_score -= 0.28
+        elif commercial_context:
+            adjusted_score += 0.24
+        grouped[value] = max(grouped.get(value, float("-inf")), adjusted_score)
         current = representatives.get(value)
-        if current is None or candidate.score > current.score:
+        current_context = "" if current is None else strip_accents(str(current.evidence_text or "")).lower()
+        current_bank = any(word in current_context for word in ("iban", "rib", "bank", "banque", "swift", "account", "capital", "r.c"))
+        current_commercial = any(word in current_context for word in (
+            "price", "prix", "amount", "montant", "total", "subtotal", "invoice", "ttc", "ht", "euro",
+        ))
+        current_score = current.score - (0.28 if current_bank else 0) + (0.24 if current_commercial else 0) if current else float("-inf")
+        if adjusted_score > current_score:
             representatives[value] = candidate
     winner = max(grouped, key=grouped.get)
-    candidate = representatives[winner]
-    candidate.score = min(1.0, max(candidate.score, grouped[winner] / max(1, len(values))))
-    return candidate
+    return representatives[winner]
 
 
 def _candidate_value(selected: dict[str, Candidate], field: str):

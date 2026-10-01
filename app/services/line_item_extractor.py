@@ -23,7 +23,7 @@ REJECT_KEYWORDS = (
 def extract_line_items(text: str, blocks: list[OCRLine] | None = None) -> list[LineItem]:
     coordinate_items = extract_line_items_from_blocks(blocks or [])
     if coordinate_items:
-        return coordinate_items
+        return _deduplicate_line_items(coordinate_items, positioned=True)
 
     items: list[LineItem] = []
     stopped = False
@@ -38,7 +38,7 @@ def extract_line_items(text: str, blocks: list[OCRLine] | None = None) -> list[L
             stopped = True
         if stopped or not clean or any(keyword in lower for keyword in REJECT_KEYWORDS):
             continue
-    return items
+    return _deduplicate_line_items(items)
 
 
 def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
@@ -63,6 +63,9 @@ def extract_line_items_from_blocks(blocks: list[OCRLine]) -> list[LineItem]:
     anchored_items = _extract_anchored_table_rows(positioned_blocks)
     if anchored_items:
         return anchored_items
+    aligned_items = _extract_aligned_commercial_rows(positioned_blocks)
+    if aligned_items:
+        return aligned_items
     rows = _group_blocks_by_row([block for block in blocks if block.bbox])
     header_seen = False
     items: list[LineItem] = []
@@ -136,6 +139,8 @@ def _parse_flexible_line_item(line: str) -> LineItem | None:
     lower = strip_accents(line).lower()
     if any(keyword in lower for keyword in REJECT_KEYWORDS) or any(keyword in lower for keyword in STOP_KEYWORDS):
         return None
+    if _is_noncommercial_numeric_description(line):
+        return None
     numbers = re.findall(r"[+-]?\d+(?:[,.]\d+)?", line)
     parsed = [parse_amount(value) for value in numbers]
     parsed = [value for value in parsed if value is not None]
@@ -145,6 +150,8 @@ def _parse_flexible_line_item(line: str) -> LineItem | None:
     description = line[:first_number.start()].strip(" #0123456789.-|[]") if first_number else line
     description = re.sub(r"\s{2,}", " ", description).strip()
     if len(description) < 3 or sum(char.isalpha() for char in description) < 3:
+        return None
+    if _is_noncommercial_numeric_description(description):
         return None
     if len(parsed) >= 4:
         quantity, unit_price, tax_rate, total = parsed[-4:]
@@ -168,6 +175,126 @@ def _parse_flexible_line_item(line: str) -> LineItem | None:
         total=total,
         confidence=0.62,
         source="flexible numeric row",
+    )
+
+
+def _is_noncommercial_numeric_description(description: str) -> bool:
+    plain = strip_accents(description).lower().strip(" :;,-")
+    if re.search(r"\bau\s+capital\s+de\b|\bimmatricul[eé]\s+(?:au|a)\b|\bregistre\s+de\s+commerce\b", plain):
+        return True
+    return bool(re.match(
+        r"^(?:packaging|colisage|pack(?:age)?\s+of\b|company\s+(?:registration|details)|"
+        r"registration\b|registered\s+(?:office|number)|share\s+capital\b|capital\s+social\b|"
+        r"matricule\s+fiscal\b|tax\s+registration\b|siret\b)",
+        plain,
+    ))
+
+
+def _extract_aligned_commercial_rows(blocks: list[OCRLine]) -> list[LineItem]:
+    positioned = [block for block in blocks if block.bbox and block.text.strip()]
+    if not positioned:
+        return []
+    ordered = sorted(positioned, key=lambda block: (block.page_number, _center_y(block), block.bbox.x1))
+    rows: list[list[OCRLine]] = []
+    row_tolerance = max(12.0, _typical_block_height(positioned) * 0.9)
+    for block in ordered:
+        center = _center_y(block)
+        row = next((
+            candidate for candidate in reversed(rows)
+            if candidate[0].page_number == block.page_number
+            and abs(_average_block_center_y(candidate) - center) <= row_tolerance
+        ), None)
+        if row is None:
+            rows.append([block])
+        else:
+            row.append(block)
+
+    items: list[LineItem] = []
+    for row in rows:
+        numeric = [(block, _parse_money_or_number(block.text.strip().replace("%", ""))) for block in row]
+        numeric = [(block, value) for block, value in numeric if value is not None]
+        if len(numeric) < 3:
+            continue
+        numeric.sort(key=lambda item: item[0].bbox.x1)
+        description_blocks = [
+            block for block in row
+            if _parse_money_or_number(block.text.strip().replace("%", "")) is None
+            and block.bbox.x2 < numeric[0][0].bbox.x1
+            and not _is_table_header(strip_accents(block.text).lower())
+        ]
+        description = _join_description_blocks(description_blocks)
+        if not description or _is_noncommercial_numeric_description(description):
+            continue
+        values = [value for _block, value in numeric]
+        quantity = values[0]
+        unit_price = values[1]
+        total = values[-1]
+        if quantity <= 0 or unit_price <= 0 or total <= 0:
+            continue
+        if not float(quantity).is_integer():
+            continue
+        # A row with aligned quantity, unit price, and amount is useful review
+        # evidence even when OCR damage makes its arithmetic inconsistent.
+        arithmetic_consistent = abs(quantity * unit_price - total) <= max(1.0, total * 0.02)
+        boxes = [block.bbox for block in row]
+        confidence_values = [block.confidence for block in row if block.confidence is not None]
+        confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.65
+        if not arithmetic_consistent:
+            confidence = min(confidence, 0.65)
+        items.append(LineItem(
+            description=description,
+            quantity=quantity,
+            unit_price=unit_price,
+            line_total_ht=total,
+            line_total_ttc=total,
+            total=total,
+            confidence=round(confidence, 3),
+            bbox={
+                "x1": min(box.x1 for box in boxes),
+                "y1": min(box.y1 for box in boxes),
+                "x2": max(box.x2 for box in boxes),
+                "y2": max(box.y2 for box in boxes),
+            },
+            page=row[0].page_number,
+            source="aligned OCR commercial row" if arithmetic_consistent else "aligned OCR commercial row needs review",
+        ))
+    return items
+
+
+def _deduplicate_line_items(items: list[LineItem], *, positioned: bool = False) -> list[LineItem]:
+    result: list[LineItem] = []
+    identities: dict[tuple, list[LineItem]] = defaultdict(list)
+    for item in items:
+        identity = (
+            re.sub(r"\W+", " ", strip_accents(item.description or "").lower()).strip(),
+            item.reference,
+            item.quantity,
+            item.unit,
+            item.unit_price,
+            item.line_total_ht,
+            item.line_total_ttc,
+            item.total,
+        )
+        prior = identities[identity]
+        if not positioned and prior:
+            continue
+        if positioned and item.bbox and any(_line_item_boxes_overlap(item.bbox, old.bbox) for old in prior if old.bbox):
+            continue
+        prior.append(item)
+        result.append(item)
+    return result
+
+
+def _line_item_boxes_overlap(first, second) -> bool:
+    first = first.model_dump() if hasattr(first, "model_dump") else first
+    second = second.model_dump() if hasattr(second, "model_dump") else second
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return False
+    return (
+        first.get("x1", 0) < second.get("x2", 0)
+        and second.get("x1", 0) < first.get("x2", 0)
+        and first.get("y1", 0) < second.get("y2", 0)
+        and second.get("y1", 0) < first.get("y2", 0)
     )
 
 
@@ -426,7 +553,8 @@ def _parse_money_or_number(text: str) -> float | None:
         return None
     if re.search(r"[A-Za-z]{2,}", clean) and not re.search(r"[$â‚¬Â£]|\d+[,.]\d{2}\b", clean):
         return None
-    match = re.search(r"[$â‚¬Â£]?\s*[-+]?\d+(?:[,.]\d+)?", clean)
+    amount_pattern = r"[$€£]?\s*[-+]?(?:\d{1,3}(?:[ ,.\u00a0]\d{3})+(?:[,.]\d{1,3})?|\d+(?:[,.]\d+)?)"
+    match = re.search(amount_pattern, clean)
     return parse_amount(match.group(0)) if match else None
 
 

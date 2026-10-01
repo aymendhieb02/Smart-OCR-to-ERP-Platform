@@ -1542,7 +1542,8 @@ def _parse_number(text: str) -> float | None:
     if not text or not re.search(r"\d", text):
         return None
     cleaned = text.replace("$", " ").replace("€", " ").replace("£", " ")
-    match = re.findall(r"\(?[-+]?\d[\d\s]*(?:[,.]\d+)?\)?%?", cleaned)
+    number = r"\(?[-+]?(?:\d{1,3}(?:[ ,.\u00a0]\d{3})+(?:[,.]\d{1,3})?|\d[\d\s]*(?:[,.]\d+)?)\)?%?"
+    match = re.findall(number, cleaned)
     if not match:
         return None
     value = match[-1].strip()

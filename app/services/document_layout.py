@@ -386,7 +386,8 @@ def _find_text_table_header(ordered: list[OCRLine]) -> tuple[int | None, list[st
 
 
 def _numeric_tokens(text: str) -> list[float]:
-    return [value for raw in re.findall(r"[-+]?\d+(?:[,.]\d+)?", text) if (value := parse_amount(raw)) is not None]
+    number = r"[-+]?(?:\d{1,3}(?:[ ,.\u00a0]\d{3})+(?:[,.]\d{1,3})?|\d+(?:[,.]\d{1,3})?)"
+    return [value for raw in re.findall(number, text) if (value := parse_amount(raw)) is not None]
 
 
 def _looks_like_description_text(text: str) -> bool:
