@@ -2,7 +2,7 @@ from datetime import date
 
 import numpy as np
 
-from app.core.schemas import BoundingBox, ExtractedInvoiceFields, OCRLine
+from app.core.schemas import BoundingBox, ExtractedInvoiceFields, LineItem, OCRLine
 from app.services.producer_invoice_review import (
     ENFIDHA_FAMILY,
     GENERAL_PRODUCER_FAMILY,
@@ -13,6 +13,7 @@ from app.services.producer_invoice_review import (
     apply_producer_review_fields,
     prepare_producer_fields,
     recover_sotacib_total_ht,
+    reread_inconsistent_producer_quantities,
     sanitize_legacy_producer_financial_fields,
 )
 from app.services.producer_table_reader import extract_producer_table_items
@@ -71,6 +72,161 @@ def test_client_party_labels_do_not_promote_shipment_payment_or_destination():
     assert semantic.get("payment").value == "BANK TRANSFER"
     assert semantic.get("destination").value == "CUSTOMER_TEST DESTINATION"
     assert semantic["client"].value not in {semantic["shipment"].value, semantic["payment"].value, semantic["destination"].value}
+
+
+def test_client_does_not_reuse_value_owned_by_overlapping_address_label():
+    lines = [
+        line("Client", 100, 100, 165, 122, 0),
+        line("Adresse", 100, 119, 180, 141, 1),
+        line("CITY-TEST 12345 COUNTRY-TEST", 220, 110, 520, 138, 2),
+    ]
+
+    semantic = _extract_labeled_details(lines, _labels_for_family(None))
+
+    assert "client" not in semantic
+    assert semantic["client_address"].value == "CITY-TEST 12345 COUNTRY-TEST"
+
+
+def test_distinct_client_name_and_address_still_map_to_their_own_fields():
+    lines = [
+        line("Client", 100, 100, 165, 122, 0),
+        line("CUSTOMER_TEST ORGANIZATION", 220, 100, 480, 122, 1),
+        line("Adresse", 100, 130, 180, 152, 2),
+        line("CUSTOMER_TEST STREET", 220, 130, 440, 152, 3),
+    ]
+
+    semantic = _extract_labeled_details(lines, _labels_for_family(None))
+
+    assert semantic["client"].value == "CUSTOMER_TEST ORGANIZATION"
+    assert semantic["client_address"].value == "CUSTOMER_TEST STREET"
+
+
+def test_fuzzy_explicit_tax_id_label_extracts_only_structured_identifier():
+    family = next(iter(SOTACIB_FAMILIES))
+    lines = [line("Matrcule.scal+TAX-TEST-001", 100, 100, 340, 122, 0)]
+
+    semantic = _extract_labeled_details(lines, _labels_for_family(family))
+
+    assert semantic["client_tax_id"].value == "TAX-TEST-001"
+    assert _extract_labeled_details(
+        [line("Address: 123 CUSTOMER_TEST ROAD", 100, 100, 360, 122, 0)],
+        _labels_for_family(family),
+    ).get("client_tax_id") is None
+
+
+def test_fuzzy_tariff_label_uses_nearest_code_not_neighboring_registration():
+    family = next(iter(SOTACIB_FAMILIES))
+    lines = [
+        line("Position tarifalre:", 100, 100, 270, 122, 0),
+        line("25 23 21 00000", 340, 101, 480, 123, 1),
+        line("R.C. N 987654321", 100, 129, 300, 151, 2),
+        line("TN59050123456789012345", 650, 100, 900, 122, 3),
+    ]
+
+    semantic = _extract_labeled_details(lines, _labels_for_family(family))
+
+    assert semantic["hs_code"].value == "25 23 21 00000"
+
+
+def test_fuzzy_bank_account_label_extracts_inline_rib_evidence():
+    family = next(iter(SOTACIB_FAMILIES))
+    lines = [
+        line("Numero Compte bancalre: RIB TESTBANK 1234567890", 100, 100, 700, 122, 0),
+        line("Moyen de reglement: CHEQUE", 100, 130, 420, 152, 1),
+    ]
+
+    semantic = _extract_labeled_details(lines, _labels_for_family(family))
+
+    assert semantic["bank_account"].value == "RIB TESTBANK 1234567890"
+
+
+class _QuantityRereadStub:
+    def __init__(self, lines):
+        self.lines = lines
+        self.calls = []
+
+    def run_targeted_region(self, image, region, *, page_number):
+        self.calls.append((image, region, page_number))
+        return self.lines
+
+
+def _mismatched_quantity_row(quantity=60):
+    return LineItem(
+        description="PRODUCT_TEST CEMENT",
+        quantity=quantity,
+        unit="MT",
+        unit_price=18,
+        line_total_ht=900,
+        total=900,
+        confidence=0.65,
+        bbox={"x1": 100, "y1": 100, "x2": 500, "y2": 180},
+        page=1,
+        source="aligned OCR commercial row",
+    )
+
+
+def test_targeted_quantity_reread_updates_only_stronger_arithmetic_resolving_evidence():
+    source = line("60", 300, 130, 335, 152, 0, confidence=0.894)
+    reread = line("50", 300, 130, 335, 152, 0, confidence=0.999)
+    row = _mismatched_quantity_row()
+    engine = _QuantityRereadStub([reread])
+
+    added, debug = reread_inconsistent_producer_quantities(
+        [source], [row], [np.zeros((300, 600, 3), dtype=np.uint8)], engine,
+    )
+
+    assert row.quantity == 50
+    assert "targeted quantity reread" in row.source
+    assert len(engine.calls) == 1
+    assert added == [reread]
+    assert debug["rows"][0]["status"] == "quantity_updated_from_stronger_targeted_ocr"
+
+
+def test_consistent_quantity_is_a_no_reread_negative_control():
+    row = LineItem(
+        description="PRODUCT_TEST CEMENT", quantity=25, unit="BAG", unit_price=40,
+        total=1000, confidence=0.9, bbox={"x1": 100, "y1": 100, "x2": 500, "y2": 180}, page=1,
+    )
+    engine = _QuantityRereadStub([line("25", 300, 130, 335, 152, 0, confidence=0.999)])
+
+    added, debug = reread_inconsistent_producer_quantities(
+        [line("25", 300, 130, 335, 152, 0, confidence=0.999)],
+        [row], [np.zeros((300, 600, 3), dtype=np.uint8)], engine,
+    )
+
+    assert row.quantity == 25
+    assert not engine.calls
+    assert added == []
+    assert debug["rows"][0]["status"] == "row_arithmetic_consistent"
+
+
+def test_targeted_quantity_reread_keeps_original_when_confidence_is_not_better():
+    row = _mismatched_quantity_row()
+    engine = _QuantityRereadStub([line("50", 300, 130, 335, 152, 0, confidence=0.90)])
+
+    _added, debug = reread_inconsistent_producer_quantities(
+        [line("60", 300, 130, 335, 152, 0, confidence=0.894)],
+        [row], [np.zeros((300, 600, 3), dtype=np.uint8)], engine,
+    )
+
+    assert row.quantity == 60
+    assert debug["rows"][0]["status"] == "reread_not_confidently_better"
+
+
+def test_targeted_quantity_reread_keeps_original_when_cell_is_ambiguous():
+    row = _mismatched_quantity_row()
+    engine = _QuantityRereadStub([
+        line("50", 300, 130, 335, 152, 0, confidence=0.999),
+        line("55", 300, 130, 335, 152, 1, confidence=0.99),
+    ])
+
+    _added, debug = reread_inconsistent_producer_quantities(
+        [line("60", 300, 130, 335, 152, 0, confidence=0.894)],
+        [row], [np.zeros((300, 600, 3), dtype=np.uint8)], engine,
+    )
+
+    assert row.quantity == 60
+    assert debug["rows"][0]["status"] == "reread_ambiguous"
 
 
 def test_legacy_amount_values_are_cleared_without_matching_financial_semantics():
