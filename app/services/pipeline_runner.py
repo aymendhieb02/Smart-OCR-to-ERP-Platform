@@ -22,6 +22,7 @@ from app.services.producer_invoice_review import (
     ENFIDHA_FAMILY, GENERAL_PRODUCER_FAMILY, PRODUCER_REVIEW_FIELDS,
     SOTACIB_FAMILIES, apply_producer_review_fields, merge_producer_semantics, prepare_producer_fields,
     recover_enfidha_proforma_reference, recover_sotacib_total_ht,
+    reread_inconsistent_producer_quantities,
 )
 from app.services.producer_table_reader import extract_producer_table_items
 from app.services.dossier_reconciler import reconcile_dossier
@@ -597,6 +598,17 @@ def _process_ocr_document(document, ocr_result, *, timings: dict[str, float], in
         generic_table_rows = extract_producer_table_items(ocr_result.lines)
         if generic_table_rows:
             fields.line_items = generic_table_rows
+        quantity_reread_lines, quantity_reread_debug = reread_inconsistent_producer_quantities(
+            ocr_result.lines,
+            fields.line_items or [],
+            document.images,
+            ocr_engine,
+            physical_page_numbers=physical_page_numbers,
+        )
+        if quantity_reread_lines:
+            ocr_result = _merge_ocr_result(ocr_result, quantity_reread_lines)
+            timings.update(getattr(ocr_engine, "last_timings", {}))
+        extraction_debug["producer_quantity_reread"] = quantity_reread_debug
         extraction_debug["producer_semantic_fields"] = sorted(producer_semantics)
         extraction_debug["producer_table_reader"] = {
             "strategy": "generic semantic header and geometry",

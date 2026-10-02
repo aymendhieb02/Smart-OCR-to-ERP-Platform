@@ -53,6 +53,43 @@ def test_canonical_adapter_preserves_machine_value_and_field_evidence():
     assert "client_tax_id" not in response.expanded_fields or response.expanded_fields["client_tax_id"].value is None
 
 
+def test_empty_canonical_bank_account_does_not_mask_populated_rib_alias():
+    response = SimpleNamespace(
+        detected_fields=ExtractedInvoiceFields(),
+        expanded_fields={
+            "bank_account": FieldExtractionDetail(value=None, source="field selection"),
+            "bank_rib": FieldExtractionDetail(value="RIB TESTBANK 1234567890", source="expanded regex"),
+        },
+    )
+
+    apply_producer_review_fields(response, next(iter(SOTACIB_FAMILIES)))
+
+    assert response.expanded_fields["bank_account"].value == "RIB TESTBANK 1234567890"
+    assert response.expanded_fields["bank_account"].source == "expanded regex"
+
+
+def test_ocr_label_or_address_candidate_is_not_exposed_as_client():
+    address_box = BoundingBox(x1=355, y1=110, x2=620, y2=138)
+    response = SimpleNamespace(
+        detected_fields=ExtractedInvoiceFields(customer_name="Cllent"),
+        expanded_fields={
+            "customer_name": FieldExtractionDetail(
+                value="Cllent", source="layout customer block",
+                bbox=BoundingBox(x1=170, y1=100, x2=315, y2=122), page=1,
+            ),
+        },
+    )
+    lines = [
+        OCRLine(text="Cllent", confidence=0.9, page_number=1, bbox=BoundingBox(x1=170, y1=100, x2=315, y2=122)),
+        OCRLine(text="Adresse", confidence=0.98, page_number=1, bbox=BoundingBox(x1=170, y1=119, x2=294, y2=141)),
+        OCRLine(text="CITY-TEST 12345 COUNTRY-TEST", confidence=0.8, page_number=1, bbox=address_box),
+    ]
+
+    apply_producer_review_fields(response, next(iter(SOTACIB_FAMILIES)), lines)
+
+    assert response.expanded_fields["client"].value is None
+
+
 def test_producer_semantics_override_legacy_values_but_preserve_human_and_template_values():
     expanded = {
         "client": FieldExtractionDetail(value="SUPPLIER_ADDRESS_TEST", source="legacy generic alias"),

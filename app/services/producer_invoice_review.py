@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 
 from app.core.schemas import BoundingBox, FieldExtractionDetail, ProcessInvoiceResponse
 from app.utils.helpers import parse_amount, parse_date, strip_accents
-from app.services.table_regions import build_label_value_region
+from app.utils.fuzzy_keywords import keyword_matches
+from app.services.table_regions import OCRRegion, build_label_value_region
 
 ENFIDHA_FAMILY = "ciments_enfidha_invoice_v1"
 SOTACIB_FAMILIES = frozenset({"sotacib_kairouan_grey_invoice_v1", "sotacib_kasserine_white_invoice_v1"})
@@ -113,6 +115,15 @@ SOTACIB_LABELS = {
     "payment_terms": (r"mode\s*de\s*r[eè]glement", r"payment\s*terms"),
 }
 
+# OCR may confuse a small number of characters in explicit labels. Fuzzy
+# matching is limited to these high-specificity party/identifier labels and is
+# only considered on a label prefix (before a delimiter or numeric value).
+FUZZY_LABEL_TERMS = {
+    "client_tax_id": ("matricule fiscale", "matricule fiscal", "client tax id", "client tax number"),
+    "hs_code": ("position tarifaire", "hs code", "tariff code"),
+    "bank_account": ("numero compte bancaire", "compte bancaire", "bank account"),
+}
+
 
 def recover_sotacib_total_ht(
     lines: list,
@@ -205,6 +216,175 @@ def recover_sotacib_total_ht(
     return detail, recovered, debug
 
 
+def reread_inconsistent_producer_quantities(
+    lines: list,
+    line_items: list,
+    images: list,
+    ocr_engine,
+    *,
+    physical_page_numbers: tuple[int, ...] | list[int] | None = None,
+) -> tuple[list, dict]:
+    """Reread only a positioned quantity cell when a row fails arithmetic.
+
+    Arithmetic is solely a trigger for additional OCR. A quantity is changed
+    only when a single numeric reread has materially higher OCR confidence and
+    independently resolves the row-total mismatch.
+    """
+    debug = {"attempted": False, "rows": [], "reason": "not_applicable"}
+    reread_lines = []
+    if not line_items:
+        debug["reason"] = "no_line_items"
+        return reread_lines, debug
+    if not images or not callable(getattr(ocr_engine, "run_targeted_region", None)):
+        debug["reason"] = "targeted_ocr_unavailable"
+        return reread_lines, debug
+    page_numbers = tuple(physical_page_numbers or range(1, len(images) + 1))
+    debug["reason"] = "no_inconsistent_quantity_rows"
+
+    for row_index, row in enumerate(line_items):
+        quantity = _decimal_or_none(getattr(row, "quantity", None))
+        unit_price = _decimal_or_none(getattr(row, "unit_price", None))
+        row_total = next((
+            amount for amount in (
+                _decimal_or_none(getattr(row, "line_total_ht", None)),
+                _decimal_or_none(getattr(row, "line_total_ttc", None)),
+                _decimal_or_none(getattr(row, "total", None)),
+            ) if amount is not None
+        ), None)
+        if quantity is None or unit_price is None or row_total is None or quantity <= 0 or unit_price <= 0:
+            debug["rows"].append({"row_index": row_index, "status": "insufficient_financial_evidence"})
+            continue
+        old_delta = abs(quantity * unit_price - row_total)
+        tolerance = max(Decimal("0.01"), abs(row_total) * Decimal("0.0001"))
+        if old_delta <= tolerance:
+            debug["rows"].append({"row_index": row_index, "status": "row_arithmetic_consistent"})
+            continue
+
+        page = int(getattr(row, "page", 1) or 1)
+        try:
+            image_index = page_numbers.index(page)
+        except ValueError:
+            debug["rows"].append({"row_index": row_index, "status": "page_image_unavailable"})
+            continue
+        row_bbox = getattr(row, "bbox", None)
+        try:
+            row_box = BoundingBox.model_validate(row_bbox) if row_bbox else None
+        except Exception:
+            row_box = None
+        if row_box is None:
+            debug["rows"].append({"row_index": row_index, "status": "row_geometry_unavailable"})
+            continue
+
+        quantity_candidates = []
+        for line in lines:
+            if getattr(line, "page_number", page) != page or getattr(line, "bbox", None) is None:
+                continue
+            text = str(getattr(line, "text", "") or "").strip()
+            if not re.fullmatch(r"[+-]?[\d\s.,]+", text):
+                continue
+            value = _decimal_or_none(parse_amount(text))
+            box = line.bbox
+            inside_row = (
+                box.x1 >= row_box.x1 - 2 and box.x2 <= row_box.x2 + 2
+                and box.y1 >= row_box.y1 - 2 and box.y2 <= row_box.y2 + 2
+            )
+            if value == quantity and inside_row:
+                quantity_candidates.append(line)
+        if len(quantity_candidates) != 1:
+            debug["rows"].append({
+                "row_index": row_index,
+                "status": "quantity_cell_ambiguous" if quantity_candidates else "quantity_cell_not_found",
+                "candidate_count": len(quantity_candidates),
+            })
+            continue
+
+        source_line = quantity_candidates[0]
+        image = images[image_index]
+        image_height, image_width = image.shape[:2]
+        page_width = getattr(source_line, "page_width", None) or max(
+            (line.bbox.x2 for line in lines if getattr(line, "page_number", page) == page and getattr(line, "bbox", None)),
+            default=source_line.bbox.x2,
+        )
+        page_height = getattr(source_line, "page_height", None) or max(
+            (line.bbox.y2 for line in lines if getattr(line, "page_number", page) == page and getattr(line, "bbox", None)),
+            default=source_line.bbox.y2,
+        )
+        scale_x = image_width / max(1.0, float(page_width))
+        scale_y = image_height / max(1.0, float(page_height))
+        line_height = max(1.0, (source_line.bbox.y2 - source_line.bbox.y1) * scale_y)
+        pad_x, pad_y = max(8, round(line_height)), max(6, round(line_height * 0.75))
+        left = max(0, round(source_line.bbox.x1 * scale_x) - pad_x)
+        top = max(0, round(source_line.bbox.y1 * scale_y) - pad_y)
+        right = min(image_width, round(source_line.bbox.x2 * scale_x) + pad_x)
+        bottom = min(image_height, round(source_line.bbox.y2 * scale_y) + pad_y)
+        if right <= left or bottom <= top:
+            debug["rows"].append({"row_index": row_index, "status": "quantity_crop_invalid"})
+            continue
+        region = OCRRegion(
+            "producer_quantity_cell",
+            image[top:bottom, left:right],
+            left,
+            top,
+            (left, top, right, bottom),
+        )
+        debug["attempted"] = True
+        reread = ocr_engine.run_targeted_region(image, region, page_number=page) or []
+        reread_lines.extend(reread)
+        reread_candidates = []
+        for candidate in reread:
+            candidate_text = str(getattr(candidate, "text", "") or "").strip()
+            if not re.fullmatch(r"[+-]?[\d\s.,]+", candidate_text):
+                continue
+            candidate_value = _decimal_or_none(parse_amount(candidate_text))
+            candidate_confidence = _decimal_or_none(getattr(candidate, "confidence", None))
+            if candidate_value is not None and candidate_value > 0 and candidate_confidence is not None:
+                reread_candidates.append((candidate_value, candidate_confidence, candidate))
+        distinct_values = {value for value, _confidence, _candidate in reread_candidates}
+        if len(distinct_values) != 1:
+            debug["rows"].append({"row_index": row_index, "status": "reread_ambiguous", "candidate_values": len(distinct_values)})
+            continue
+        new_quantity = next(iter(distinct_values))
+        best = max((item for item in reread_candidates if item[0] == new_quantity), key=lambda item: item[1])
+        new_confidence, new_line = best[1], best[2]
+        old_confidence = _decimal_or_none(getattr(source_line, "confidence", None)) or Decimal("0")
+        new_delta = abs(new_quantity * unit_price - row_total)
+        if new_quantity == quantity:
+            status = "reread_confirms_existing_quantity"
+        elif new_confidence < Decimal("0.90") or new_confidence < old_confidence + Decimal("0.02"):
+            status = "reread_not_confidently_better"
+        elif new_delta > tolerance or new_delta >= old_delta:
+            status = "reread_does_not_resolve_row_mismatch"
+        else:
+            row.quantity = float(new_quantity)
+            row.source = f"{getattr(row, 'source', 'OCR row')}; targeted quantity reread"
+            status = "quantity_updated_from_stronger_targeted_ocr"
+        debug["rows"].append({
+            "row_index": row_index,
+            "status": status,
+            "original_quantity": float(quantity),
+            "reread_quantity": float(new_quantity),
+            "original_confidence": float(old_confidence),
+            "reread_confidence": float(new_confidence),
+            "original_arithmetic_delta": float(old_delta),
+            "reread_arithmetic_delta": float(new_delta),
+            "region_bbox": list(region.coordinates),
+            "physical_page": page,
+        })
+    if debug["attempted"]:
+        debug["reason"] = "targeted_reread_completed"
+    return reread_lines, debug
+
+
+def _decimal_or_none(value) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return result if result.is_finite() else None
+
+
 def _is_bare_total_ht_label(line) -> bool:
     text = _plain_line(line).strip()
     return bool(re.fullmatch(r"(?:total\s*h\.?t\.?|montant\s*h\.?t\.?)\s*[:#=\-–]?", text, re.I))
@@ -252,16 +432,39 @@ def apply_producer_review_fields(response: ProcessInvoiceResponse, family: str |
     semantic.update(_extract_geometric_parties(ocr_lines or [], semantic))
     merge_producer_semantics(expanded, semantic, family_key)
     for canonical in allowed:
-        if canonical in expanded:
+        current = expanded.get(canonical)
+        current_source = str(getattr(current, "source", "") or "").casefold()
+        if canonical == "client" and current is not None and not any(
+            marker in current_source
+            for marker in ("human correction", "manual correction", "review correction", "known-template", "template enhancement")
+        ) and _invalid_client_candidate(current.value, current, ocr_lines or []):
+            current = None
+            expanded.pop(canonical, None)
+        if current is not None and current.value not in (None, ""):
+            continue
+        if current is not None and any(
+            marker in current_source
+            for marker in ("human correction", "manual correction", "review correction", "known-template", "template enhancement")
+        ):
             continue
         detail = None
         for source_key in SOURCE_KEYS.get(canonical, (canonical,)):
-            detail = expanded.get(source_key)
+            candidate_detail = expanded.get(source_key)
             value = detected.get(source_key)
-            if detail is not None or value not in (None, ""):
-                if detail is None:
-                    detail = FieldExtractionDetail(value=value, source="canonical producer alias")
+            if candidate_detail is not None and candidate_detail.value not in (None, ""):
+                if canonical == "client" and _invalid_client_candidate(candidate_detail.value, candidate_detail, ocr_lines or []):
+                    continue
+                detail = candidate_detail
                 break
+            if value not in (None, ""):
+                if canonical == "client" and _invalid_client_candidate(value, candidate_detail, ocr_lines or []):
+                    continue
+                detail = candidate_detail or FieldExtractionDetail(value=value, source="canonical producer alias")
+                break
+            # An explicit but empty canonical slot (often created by legacy
+            # field selection) must not mask a populated compatibility alias.
+            if detail is None:
+                detail = candidate_detail
         if detail is None:
             detail = FieldExtractionDetail(value=None, display_value="", source="not extracted")
         if detail.machine_value is None:
@@ -621,6 +824,84 @@ def _detail(line, value: str, source: str) -> FieldExtractionDetail:
         line_index=getattr(line, "line_index", None), source=source, evidence_text=getattr(line, "text", None))
 
 
+def _fuzzy_labeled_value(text: str, field_name: str) -> str | None:
+    terms = FUZZY_LABEL_TERMS.get(field_name)
+    if not terms:
+        return None
+    delimiter = re.search(r"[:#=+]", text)
+    if delimiter:
+        label_prefix = text[:delimiter.start()].strip()
+        value = text[delimiter.end():].strip(" \t:;#-+")
+    else:
+        first_digit = re.search(r"\d", text)
+        if first_digit:
+            label_prefix = text[:first_digit.start()].strip(" \t:;#-+")
+            value = text[first_digit.start():].strip(" \t:;#-+")
+        else:
+            label_prefix = text.strip(" \t:;#-+")
+            value = ""
+    if keyword_matches(label_prefix, terms, threshold=90):
+        return value
+    return None
+
+
+def _address_label_owns_candidate(lines: list, client_label, candidate) -> bool:
+    client_box = getattr(client_label, "bbox", None)
+    candidate_box = getattr(candidate, "bbox", None)
+    if client_box is None or candidate_box is None:
+        return False
+    page = getattr(client_label, "page_number", None)
+
+    def overlap_ratio(first, second) -> float:
+        overlap = max(0.0, min(first.y2, second.y2) - max(first.y1, second.y1))
+        return overlap / max(1.0, first.y2 - first.y1)
+
+    client_overlap = overlap_ratio(candidate_box, client_box)
+    client_center = (client_box.y1 + client_box.y2) / 2
+    candidate_center = (candidate_box.y1 + candidate_box.y2) / 2
+    client_gap = abs(candidate_center - client_center)
+    for line in lines:
+        address_box = getattr(line, "bbox", None)
+        if line is client_label or address_box is None or getattr(line, "page_number", page) != page:
+            continue
+        address_text = str(getattr(line, "text", "") or "").strip().rstrip(":#= -")
+        if not any(re.fullmatch(alias, address_text, re.I) for alias in COMMON_LABELS["client_address"]):
+            continue
+        if candidate_box.x1 < address_box.x1 - 12:
+            continue
+        address_overlap = overlap_ratio(candidate_box, address_box)
+        address_center = (address_box.y1 + address_box.y2) / 2
+        address_gap = abs(candidate_center - address_center)
+        if address_overlap >= 0.25 and address_overlap > client_overlap and address_gap < client_gap:
+            return True
+    return False
+
+
+def _invalid_client_candidate(value, detail, lines: list) -> bool:
+    text = str(value or "").strip()
+    tokens = re.findall(r"[\w]+", strip_accents(text).lower())
+    if len(tokens) == 1 and len(tokens[0]) <= 12 and keyword_matches(
+        tokens[0], ("client", "customer", "buyer", "acheteur"), threshold=90,
+    ):
+        return True
+    candidate_box = getattr(detail, "bbox", None)
+    candidate_page = getattr(detail, "page", None)
+    if candidate_box is None:
+        return False
+    candidate_height = max(1.0, candidate_box.y2 - candidate_box.y1)
+    for line in lines:
+        label_box = getattr(line, "bbox", None)
+        if label_box is None or getattr(line, "page_number", candidate_page) != candidate_page:
+            continue
+        label_text = str(getattr(line, "text", "") or "").strip().rstrip(":#= -")
+        if not any(re.fullmatch(alias, label_text, re.I) for alias in COMMON_LABELS["client_address"]):
+            continue
+        overlap = max(0.0, min(candidate_box.y2, label_box.y2) - max(candidate_box.y1, label_box.y1))
+        if overlap / candidate_height >= 0.4 and candidate_box.x1 >= label_box.x1 - 12:
+            return True
+    return False
+
+
 def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...]]) -> dict[str, FieldExtractionDetail]:
     extracted: dict[str, FieldExtractionDetail] = {}
     for field_name, aliases in field_labels.items():
@@ -643,17 +924,24 @@ def _extract_labeled_details(lines: list, field_labels: dict[str, tuple[str, ...
                 else:
                     pattern = rf"^\s*(?:{alias_body})\s*(?:[:#=\-–]\s*|\s+)?(.*?)\s*$"
                 match = re.match(pattern, text, re.IGNORECASE)
-                if not match:
+                fuzzy_value = None if match else _fuzzy_labeled_value(text, field_name)
+                if not match and fuzzy_value is None:
                     continue
-                value = (match.group(1) or "").strip(" \t:;#-")
+                value = (match.group(1) if match else fuzzy_value) or ""
+                value = value.strip(" \t:;#-+")
                 paired_line = None
                 if not value or re.fullmatch(r"[!?.:]+", value) or (field_name == "client_tax_id" and re.fullmatch(r"[?d]+", value, re.I)):
                     paired_value = _nearest_labeled_value(lines, line, field_name)
                     if paired_value:
                         value, paired_line = paired_value
-                value = value.strip(" \t:;#-!")
+                value = value.strip(" \t:;#-!+")
                 if not value:
                     continue
+                if field_name == "client" and paired_line and _address_label_owns_candidate(lines, line, paired_line):
+                    continue
+                if field_name == "client_tax_id" and fuzzy_value is not None:
+                    if not re.fullmatch(r"[A-Z0-9][A-Z0-9./ -]{2,}", value, re.I) or not re.search(r"\d", value):
+                        continue
                 if field_name in {"total", "total_ht"}:
                     amount = parse_amount(re.sub(r"[^\d,.+\-]", "", value))
                     if amount is None:
