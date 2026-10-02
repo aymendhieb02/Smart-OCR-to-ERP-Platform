@@ -302,25 +302,69 @@ No TAR compression experiment was performed because no release TAR was made.
 
 The measured candidate clears the approximate material-size and measured
 behavior/performance gates, but the deployment export test suite did not
-terminate cleanly. **Do not merge, push, tag, create a v3.3 release TAR, or
-replace v3.2 yet.** No remote registry was pushed to. The original v3.2 tag,
+terminate cleanly in the restricted workspace execution. Follow-up diagnosis
+on 2026-10-02 captured the Python main thread inside pytest's built-in cache
+provider (`pytest_sessionfinish` -> `_make_cachedir` -> `tempfile.mkdtemp`) as
+it attempted to create the normal `.pytest_cache` directory in the external
+export. No test/application worker thread, child process, or unclosed client
+was holding shutdown open. The external export is outside the workspace's
+write boundary; the same unmodified default command, run with authorized
+filesystem access, exited normally with `33 passed, 1 warning` and exit code 0.
+This is an execution-sandbox boundary, not an application/test cleanup defect;
+no test workaround or product-code change is warranted.
+
+The candidate measurements remain provisional until the exact optimized
+configuration is rebuilt from the actual clean export and the remaining
+release gates complete. **Do not merge, push, tag, create a v3.3 release TAR,
+or replace v3.2 yet.** No remote registry was pushed to. The original v3.2 tag,
 image, and TAR remain the rollback point.
 
-Next work, after the export test-runner shutdown issue is resolved:
+Next work:
 
-1. Rerun all 33 export tests and require a normal pytest summary and exit code.
-2. Re-run source and export suites against the final tracked/export
-   configuration.
-3. If tests remain clean, synchronize only the two measured packaging changes
+1. Re-run source and export suites against the final export configuration.
+2. Synchronize only the two measured packaging changes
    (remove redundant headless requirement from this pinned deployment export;
    remove pip from runtime after builder `pip check`) and rebuild from the
    actual clean export, not the copied experiment context.
-4. Recheck exact OpenAPI/response parity, the six-dossier set, offline OCR,
+3. Recheck exact OpenAPI/response parity, the six-dossier set, offline OCR,
    Tesseract, package integrity, image size, resource measurements, and
    privacy. Preserve v3.2 throughout.
-5. Only then consider committing/pushing the feature branch, merging to main,
+4. Only then consider committing/pushing the feature branch, merging to main,
    publishing a v3.3 TAR, and tagging `v3.3`.
 
-Current Git result: no product code, requirements, export files, or release
-files were changed; no commit, push, merge, or tag was created. The audit file
-and experimental artifacts are local pending the test-runner gate.
+At the original audit checkpoint, no product code, requirements, export
+files, or release files had been changed. Current Git contains this audit
+document update only; deployment packaging edits are confined to the local
+external export. No commit, push, merge, or v3.3 tag has yet been created.
+
+## Final build and gate update (2026-10-02)
+
+After resolving the pytest write-boundary issue, the two approved packaging
+changes were applied only to the actual clean deployment export at
+`D:\Stage_udgroup\ocr_export_ruspina`: remove the redundant pinned
+`opencv-python-headless==4.13.0.92` while retaining the transitive/runtime
+`opencv-contrib-python==4.10.0.84`, and run builder `pip check` before
+uninstalling runtime `pip`. `setuptools` remains installed. The export test
+suite completed normally with `33 passed, 1 warning`, exit code 0; the source
+suite completed with `687 passed, 1 warning`.
+
+The production tag `ocr-ruspina:3.3` was built from the actual export and has
+the exact same immutable image ID as the previously measured candidate:
+`sha256:939b0d0774377db2081242d6ece53e4e6ea01cec4198008b594aa1641b9196f6`.
+It is 1,834,186,378 bytes, Linux/amd64, 11 layers, configured as `appuser`
+(UID 10001) with one Uvicorn worker. The final runtime has no `pip` module and
+uses OpenCV 4.10.0. The measured saving against v3.2 remains 98,733,256 bytes
+(5.11%).
+
+Final-image checks completed so far: health and all three expected OpenAPI
+paths pass; the service remains healthy after a restart; offline synthetic
+Paddle OCR passed twice with one model initialization and subsequent reuse;
+Tesseract 5.3.0 has both `eng` and `fra` and recognized the synthetic invoice;
+and the privacy audit found zero forbidden files, source paths, or secret
+environment keys. Since this image ID is byte-identical to the candidate,
+the previously recorded exact six-dossier public-response parity and
+cold/warm/RSS measurements apply to this build as well.
+
+The v3.3 TAR checksum, reload identity check, and Git delivery/tag details are
+recorded in `release_v3.3/RELEASE_MANIFEST.txt` alongside the deployment
+handoff. The v3.2 tag, image, and release TAR have not been modified.
