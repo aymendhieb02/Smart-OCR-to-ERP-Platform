@@ -1,6 +1,6 @@
 # Benchmark Summary
 
-This project contains two benchmark directions:
+This project contains two benchmark workflows:
 
 1. Tiered dataset evaluation for fast development checks.
 2. Manual ground-truth benchmark scaffolding for true accuracy measurement.
@@ -25,8 +25,11 @@ The multi-dataset benchmark scans external datasets and writes per-dataset and g
 
 ```powershell
 python scripts/benchmark_multi_datasets.py --check-env
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_mr_f\sources\datasets --limit-per-dataset 5 --seed 42 --force
+$DatasetsRoot = 'D:\data\datasets'
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 5 --seed 42 --force
 ```
+
+Replace the example path with your authorized local dataset directory; do not commit client or licensed dataset files.
 
 The environment check is important. If no OCR engine is available, the benchmark must stop instead of producing a fake all-failed report.
 
@@ -42,6 +45,8 @@ Important distinction:
 
 OCR confidence is not true accuracy.
 
+See [Tiered evaluation](benchmarks/tiered-evaluation.md) and [Multi-dataset benchmark](benchmarks/multi-dataset.md) for complete commands and output details.
+
 ## What to Show in Presentation
 
 Show benchmark methodology, not exaggerated numbers:
@@ -50,4 +55,3 @@ Show benchmark methodology, not exaggerated numbers:
 - cached OCR for repeatability
 - blocked export for uncertain results
 - manual ground truth required for final accuracy claims
-

@@ -2,10 +2,10 @@
 
 This project should not process all 8,000+ documents during normal development. Use the tiered evaluator in `scripts/evaluate_dataset.py` and keep the default mode as `smoke`.
 
-Dataset root:
+Dataset root: set this to the directory that contains your authorized `batch_1`, `batch_2`, and `batch_3` folders. Keep the dataset outside Git.
 
 ```powershell
-D:\Stage_udgroup\sources
+$DatasetsRoot = 'D:\data\sources'
 ```
 
 Expected folders:
@@ -21,7 +21,7 @@ Supported files: `.pdf`, `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`.
 Run this after every code change:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode smoke
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode smoke
 ```
 
 Smoke mode randomly samples 30 documents balanced across `batch_1`, `batch_2`, and `batch_3`. It runs the full extraction pipeline but finishes fast enough for development.
@@ -29,13 +29,13 @@ Smoke mode randomly samples 30 documents balanced across `batch_1`, `batch_2`, a
 For reproducible debugging:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode smoke --seed 42
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode smoke --seed 42
 ```
 
 The default mode is `smoke`, so this is equivalent:
 
 ```powershell
-python scripts/evaluate_dataset.py
+python scripts/evaluate_dataset.py --source $DatasetsRoot
 ```
 
 ## Medium Evaluation
@@ -43,7 +43,7 @@ python scripts/evaluate_dataset.py
 Use this when you want a more meaningful report without waiting for the full dataset:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode medium
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode medium
 ```
 
 Medium mode samples 300 documents balanced across the three batches and writes detailed reports.
@@ -53,7 +53,7 @@ Medium mode samples 300 documents balanced across the three batches and writes d
 Use full mode only for overnight or long unattended runs:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode full --resume
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode full --resume
 ```
 
 Full mode processes every supported document. It writes a checkpoint every 25 documents and can resume without starting from zero.
@@ -70,19 +70,19 @@ outputs/cache/layout/{hash}.json
 Cached mode reuses those artifacts when available, so extraction and validation changes can be tested without rerunning OCR for documents already seen:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode cached --resume
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode cached --resume
 ```
 
 Cache is enabled by default. To explicitly keep cache enabled in a scripted command:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode smoke --no-ocr-cache false
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode smoke --no-ocr-cache false
 ```
 
 To force OCR/layout recomputation:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode smoke --no-ocr-cache true
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode smoke --no-ocr-cache true
 ```
 
 ## Fail-Fast Debugging
@@ -90,13 +90,13 @@ python scripts/evaluate_dataset.py --mode smoke --no-ocr-cache true
 Use fail-fast mode when a new change is causing hard crashes:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode fail-fast --seed 42
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode fail-fast --seed 42
 ```
 
 It uses a smoke-sized sample and stops after 10 critical errors. For an even stricter run that stops after the first critical error:
 
 ```powershell
-python scripts/evaluate_dataset.py --mode smoke --fail-fast
+python scripts/evaluate_dataset.py --source $DatasetsRoot --mode smoke --fail-fast
 ```
 
 ## Outputs
