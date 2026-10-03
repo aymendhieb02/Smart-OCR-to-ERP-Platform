@@ -1,0 +1,22 @@
+flowchart TD
+    A[PDF or scanned image] --> B[Validate upload and render physical pages]
+    B --> C[Collect embedded text when available]
+    B --> D[Offline OCR using packaged PaddleOCR models]
+    C --> E[Page-aware text and OCR evidence]
+    D --> E
+    E --> F[Page classification and dossier segmentation]
+    F --> G{Ambiguous page routing?}
+    G -->|Yes| H[Reviewer assigns semantic page group]
+    H --> I[Layout, geometry, and document graph]
+    G -->|No| I
+    I --> J[Candidate-based field extraction]
+    I --> K[Table and line-item reconstruction]
+    J --> L[Field and extraction quality checks]
+    K --> L
+    L --> M[Financial consistency and business validation]
+    M --> N[Confidence and review decision]
+    N --> O{Processing outcome}
+    O -->|Routing review required| G
+    O -->|Completed| P[Structured JSON; unresolved values remain null]
+    P --> Q[Consumer-side human verification]
+    Q --> R[ERP import policy / integration]
