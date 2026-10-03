@@ -1,270 +1,86 @@
 # Smart OCR-to-ERP Platform
 
-Smart OCR-to-ERP Platform is a production-style document intelligence system for turning invoices and business documents into validated ERP-ready JSON.
+An OCR-assisted document review workspace for turning invoices and related trade documents into structured data that can be checked before ERP export. The system combines OCR evidence, document/page classification, deterministic extraction, line-item reconstruction, financial validation, and human review.
 
-It combines OCR, layout understanding, deterministic field extraction, table reconstruction, financial validation, and a human review workspace. The goal is not just to read text from a document, but to decide whether the extracted business data is reliable enough to export into an ERP system.
+The key product rule is **review before export**: extracted data is not treated as correct merely because OCR returned a value. Missing, conflicting, low-confidence, or financially inconsistent data is surfaced for review. OCR confidence is not true accuracy; measured accuracy requires comparison with manually verified ground truth.
 
-## Key Features
-
-- Upload invoices, receipts, delivery notes, purchase orders, PDFs, scanned PDFs, and image files.
-- Extract supplier, customer, invoice metadata, totals, taxes, currency, and line items.
-- Preserve OCR evidence with bounding boxes, confidence scores, page numbers, and coordinate metadata.
-- Detect logical document regions such as supplier, customer, metadata, products, totals, taxes, payment, notes, and footer.
-- Reconstruct editable product/service line items from OCR layout.
-- Validate HT/subtotal, VAT, TTC, tax rate, row totals, and ERP-required fields.
-- Block unsafe ERP export when values are missing, inconsistent, or require review.
-- Provide a clean browser review UI with document preview, overlays, editable fields, editable line items, correction saving, and automatic revalidation.
-- Export deterministic ERP JSON for downstream integration.
-- Support benchmarking, diagnostics, timing reports, and regression tests.
-
-## Product Workflow
+## How it works
 
 ```mermaid
-flowchart TD
-    A["Document upload"] --> B["File loading and preview generation"]
-    B --> C["OCR with text, confidence, and bounding boxes"]
-    C --> D["Layout analysis and document graph"]
-    D --> E["Candidate-based field extraction"]
-    E --> F["Table and line-item reconstruction"]
-    F --> G["Financial reasoning and validation"]
-    G --> H["ERP readiness gate"]
-    H --> I{"Safe for ERP export?"}
-    I -->|Yes| J["ERP JSON"]
-    I -->|No| K["Human review UI"]
-    K --> L["Reviewer edits fields and rows"]
-    L --> M["Automatic revalidation"]
-    M --> H
+flowchart LR
+    A[PDF or image upload] --> B[Render pages and collect available text]
+    B --> C[OCR with page and box evidence]
+    C --> D[Classify pages and group logical documents]
+    D --> E{Routing clear?}
+    E -->|No| F[Reviewer resolves page routing]
+    F --> G[Layout and semantic analysis]
+    E -->|Yes| G
+    G --> H[Field extraction and table reconstruction]
+    H --> I[Quality, financial, and ERP-readiness checks]
+    I --> J[Review workspace]
+    J --> K[Human correction and revalidation]
+    K --> I
+    I --> L[ERP JSON export when ready]
 ```
 
-## Why It Is Deterministic
+The browser workspace supports multi-page dossiers: physical-page navigation is synchronized with logical-document tabs, while fields remain scoped to their logical document and page evidence/overlays remain scoped to the selected physical page.
 
-ERP data must be traceable. The main extraction path is deterministic so every result can be explained by OCR evidence, layout position, candidate scoring, and validation rules.
+## Quick start
 
-This keeps the system:
-
-- auditable;
-- easier to test;
-- safer for financial fields;
-- cheaper to run;
-- independent of external LLM services;
-- suitable for production review workflows.
-
-## Main Modules
-
-```text
-app/
-  main.py                         FastAPI application and routes
-  core/
-    config.py                     Environment settings
-    schemas.py                    API and ERP response models
-  services/
-    ocr_engine.py                 OCR execution and normalization
-    pipeline_runner.py            Main processing orchestration
-    document_layout.py            Layout and table reconstruction
-    field_extractor.py            Candidate-based field extraction
-    financial_reasoner.py         Totals and arithmetic reasoning
-    validator.py                  ERP validation rules
-    erp_mapper.py                 ERP JSON/export mapping
-    correction_store.py           Review correction and revalidation flow
-  static/
-    index.html                    Review UI shell
-    app.js                        Review UI behavior
-    styles.css                    Review UI styling
-scripts/                          Benchmarks, audits, diagnostics, utilities
-tests/                            Regression and service tests
-docs/                             Architecture, audit, and release notes
-```
-
-## Requirements
-
-Recommended:
-
-- Python 3.11+
-- Windows, Linux, or macOS
-- PaddleOCR-compatible environment
-- Optional Tesseract installation for fallback OCR paths
-
-Core Python dependencies are listed in:
-
-```text
-requirements.txt
-```
-
-Optional dependency sets:
-
-```text
-requirements-dev.txt       tests, reports, benchmark tooling
-requirements-ml.txt        optional Table Transformer / layout model experiments
-```
-
-## Local Setup
-
-From the project root:
+Requirements: Python 3.11 or newer. PaddleOCR is the primary OCR engine; Tesseract is an optional fallback and must be installed separately if you want that fallback available.
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-For development and tests:
-
-```powershell
-python -m pip install -r requirements-dev.txt
-```
-
-For optional ML model experiments only:
-
-```powershell
-python -m pip install -r requirements-ml.txt
-```
-
-Copy the environment template if needed:
-
-```powershell
-copy .env.example .env
-```
-
-## Run The App
-
-```powershell
 python run.py
 ```
 
-Then open:
+Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). API documentation is at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+
+For development and tests, install `requirements-dev.txt`. Optional layout/table-model experiments are described by `requirements-ml.txt`; they are not required for the default workflow. See [Windows setup](docs/setup_windows.md) and [.env.example](.env.example) for configuration.
+
+## API surface
+
+The main workflows are:
+
+- `POST /process-dossier` — process a multi-page dossier and return logical documents, extracted fields, line items, evidence, validation, and review state.
+- `POST /process-invoice` — process a single invoice/document.
+- `POST /resolve-dossier-routing` — continue a dossier after ambiguous page routing is reviewed.
+- `POST /review/reconcile-dossier` and `POST /review/validate-corrections` — apply/revalidate human review changes.
+- `POST /export-erp-json` and `POST /export-simple-dossier-json` — produce structured exports.
+- `GET /health` — health check.
+
+Demo-document, correction, and dataset-evaluation routes are also available; the running API’s Swagger page is the authoritative request/response reference.
+
+## Project map
 
 ```text
-http://127.0.0.1:8000/
+app/                 FastAPI application, services, schemas, and review UI
+scripts/             Dataset evaluation, benchmarks, and diagnostics
+tests/               API, service, UI-contract, and regression tests
+docs/                Architecture, setup, limitations, and benchmark guides
+dataset/             Synthetic/public evaluation assets and report structure
 ```
 
-Useful endpoints:
+See [Architecture](docs/architecture_overview.md) for the processing flow and module responsibilities, and [Documentation index](docs/README.md) for the rest of the project guides.
 
-```text
-GET  /health
-POST /process-invoice
-POST /review/validate-corrections
-```
-
-Swagger is available at:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## Review UI
-
-The browser UI is the recommended demo surface. It lets the reviewer:
-
-- upload a document;
-- see the document preview;
-- inspect OCR/layout/field overlays;
-- edit detected ERP fields;
-- edit line items directly in the table;
-- see a live line-items total;
-- save corrections;
-- re-run validation without re-running OCR;
-- copy ERP JSON after the document is safe.
-
-The UI and Swagger use the same backend API, so a successful UI demo also proves the API flow.
-
-## ERP Safety Gate
-
-The system separates extraction from export. A value can be detected but still withheld from ERP export if it fails validation.
-
-Typical reasons for review:
-
-- missing required fields;
-- HT + VAT does not match TTC;
-- line totals do not match invoice totals;
-- suspicious tax rate;
-- low confidence OCR or extraction evidence;
-- incomplete line item rows;
-- conflicting candidate values.
-
-OCR confidence is not true accuracy; accuracy must be measured against human-verified ground truth.
-
-Only validated corrected data should be exported.
-
-## Docker
-
-A Dockerfile is included for deployment packaging.
-
-Build:
+## Tests and evaluation
 
 ```powershell
-docker build -t smart-ocr-erp .
+python -m pip install -r requirements-dev.txt
+python -m pytest
 ```
 
-Run:
+The benchmark guides explain smoke/medium/full evaluation and multi-dataset reporting. Run them only with datasets you are authorized to process. Benchmark completeness, model confidence, and human-verified accuracy are different measures; do not present confidence or unverified labels as accuracy.
 
-```powershell
-docker run --rm -p 8000:8000 smart-ocr-erp
-```
+## Data handling
 
-Then open:
+Client documents, OCR output, and human-verified client labels are private working data and must stay local. Do not commit PDFs, raw OCR evidence, generated predictions containing source text, or client ground truth. The repository ignores `/local_data/`, `/dossier_ground_truth/`, and `/dataset/dossier_ground_truth/`; verify `git status` before committing. Keep only synthetic or appropriately anonymized fixtures in tests and documentation.
 
-```text
-http://127.0.0.1:8000/
-```
+The app accepts multilingual source documents, including French, English, and Arabic text. Source-text Unicode is preserved as data; Arabic UI localization and right-to-left layout are not implemented. Review original page images when verifying OCR.
 
-Note: OCR model downloads and optional native dependencies may require extra system setup depending on the target environment.
+## Deployment boundary
 
-## Testing
-
-Compile check:
-
-```powershell
-python -m compileall app scripts tests
-```
-
-Focused test example:
-
-```powershell
-python -m pytest tests/test_field_consistency.py -q
-```
-
-Full suite:
-
-```powershell
-python -m pytest -q
-```
-
-Some experimental tests may require optional ML dependencies from `requirements-ml.txt`.
-
-## Benchmarking And Diagnostics
-
-The repository includes scripts for dataset evaluation, performance timing, table diagnostics, and extraction quality analysis.
-
-Common report locations:
-
-```text
-dataset/reports/
-outputs/
-```
-
-Generated benchmark outputs, caches, model weights, and local runtime artifacts should not be committed.
-
-## Configuration
-
-Settings are read from environment variables through `app/core/config.py`.
-
-Use `.env.example` as the starting point for local deployment configuration.
-
-Optional model integrations such as Table Transformer and layout model experiments are gated by configuration and are not required for the core deterministic OCR-to-ERP workflow.
-
-## Delivery Notes
-
-This final product version is designed around a clean deterministic workflow:
-
-```text
-OCR -> layout -> extraction -> table reconstruction -> validation -> review -> ERP JSON
-```
-
-The archived previous README is kept at:
-
-```text
-docs/archive/README_before_final_product.md
-```
-
-Use that file only as historical documentation. The root `README.md` describes the current final product.
+The root `Dockerfile` is a general repository build, not a promise of a hardened, multi-user production service. Before exposing it to untrusted users, add deployment-specific authentication/authorization, storage and retention controls, resource limits, observability, and security review. The application does not include a live ERP connector; JSON export is an integration boundary. See [limitations](docs/limitations.md) for the current product boundary. Version-specific deployment audits should be published separately only after checking that they contain no local paths, credentials, or client data.

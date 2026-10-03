@@ -28,6 +28,7 @@ dataset/**/reports/
 
 # Local environment
 /local_data/
+/dossier_ground_truth/
 /dataset/dossier_ground_truth/
 .env
 .env.*

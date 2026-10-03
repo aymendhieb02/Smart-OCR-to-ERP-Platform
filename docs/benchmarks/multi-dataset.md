@@ -1,22 +1,26 @@
 ﻿# Multi-Dataset Benchmark
 
-This benchmark layer runs the existing OCR-to-ERP pipeline on samples from multiple datasets without changing the core extraction flow.
+This benchmark layer runs the existing OCR-to-ERP pipeline on samples from multiple datasets without changing the core extraction flow. Set `$DatasetsRoot` once in PowerShell to the parent folder containing your authorized datasets; keep it outside Git.
+
+```powershell
+$DatasetsRoot = 'D:\data\datasets'
+```
 
 ## Run a small benchmark
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 5 --seed 42
 ```
 
 If the environment was broken in a previous run and failed predictions already exist, rerun after fixing OCR with:
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42 --force
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 5 --seed 42 --force
 ```
 
 ## Check environment
 
-```bash
+```powershell
 python scripts/benchmark_multi_datasets.py --check-env
 ```
 
@@ -26,44 +30,44 @@ The benchmark stops immediately if no OCR engine is available.
 
 Smoke:
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 5 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 5 --seed 42
 ```
 
 Medium:
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 100 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 100 --seed 42
 ```
 
 Real:
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 500 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 500 --seed 42
 ```
 
 Full:
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --seed 42
 ```
 
 ## Run one dataset
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --dataset FATURA2-invoices --limit-per-dataset 100 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --dataset FATURA2-invoices --limit-per-dataset 100 --seed 42
 ```
 
 ## Run all datasets
 
-```bash
-python scripts/benchmark_multi_datasets.py --datasets-root D:\Stage_udgroup\sources\datasets --limit-per-dataset 50 --seed 42
+```powershell
+python scripts/benchmark_multi_datasets.py --datasets-root $DatasetsRoot --limit-per-dataset 50 --seed 42
 ```
 
 ## Regenerate reports only
 
 ```bash
-python scripts/generate_multi_dataset_report.py --output D:\Stage_udgroup\invoice-ocr-erp\dataset\reports\multi_dataset_benchmark
+python scripts/generate_multi_dataset_report.py --output dataset/reports/multi_dataset_benchmark
 ```
 
 ## Outputs

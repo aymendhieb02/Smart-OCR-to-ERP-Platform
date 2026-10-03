@@ -1,68 +1,45 @@
-# Windows Setup
+# Windows setup
 
-## 1. Open PowerShell
+## Requirements
 
-```powershell
-cd D:\Stage_mr_f\invoice-ocr-erp
-```
+- Windows 10/11 and Python 3.11 or newer.
+- Git for checkout/update workflows.
+- PaddleOCR dependencies are installed from `requirements.txt`. First OCR use may initialize/download model assets, so allow time and network access as required by the configured engine.
+- Tesseract is optional. Install it separately and configure its executable/languages if you want to use the fallback path.
 
-## 2. Create or activate the virtual environment
+## Create an environment and run
 
-If `.venv` already exists:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-If it does not exist:
+From the repository directory in PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-If PowerShell blocks activation, run:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-Then activate again.
-
-## 3. OCR Dependencies
-
-The project can use PaddleOCR and Tesseract. At least one OCR path must work for real image extraction.
-
-Check benchmark OCR environment:
-
-```powershell
-python scripts/benchmark_multi_datasets.py --check-env
-```
-
-## 4. Start the App
-
-```powershell
+python -m pip install -r requirements.txt
 python run.py
 ```
 
-Open:
+Open `http://127.0.0.1:8000/`. The API schema is at `http://127.0.0.1:8000/docs` and the health check is `http://127.0.0.1:8000/health`.
 
-```text
-http://127.0.0.1:8000/
-```
+If PowerShell blocks local activation, either use the venv interpreter directly (`.\.venv\Scripts\python.exe`) or adjust the execution policy for the current user according to your organization’s policy. Do not weaken a managed machine’s policy without approval.
 
-Swagger remains available at:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## 5. Run Tests
+## Development and optional models
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest
-python -m compileall -q app scripts tests
 ```
 
+Optional model experiments have a separate dependency file:
+
+```powershell
+python -m pip install -r requirements-ml.txt
+```
+
+They are not needed for the default application path. Copy `.env.example` to `.env` only when local settings need to differ from defaults; keep `.env` and credentials out of Git.
+
+## Local data and outputs
+
+Use an external/private dataset directory for client files. Keep client PDFs, OCR evidence, and verified labels under ignored local storage such as `local_data/` or the ignored `dossier_ground_truth/` directory. Generated outputs and caches should remain local; check `git status --short` before every commit.
+
+For the benchmark modes and dataset-root options, see [Tiered evaluation](benchmarks/tiered-evaluation.md) and [Multi-dataset benchmark](benchmarks/multi-dataset.md).
