@@ -1,0 +1,25 @@
+{
+  "api_version": "1.0",
+  "status": "completed",
+  "data": {
+    "page1": {
+      "seller": "Example Supplier",
+      "invoice_number": "INV-2026-001",
+      "invoice_date": "2026-01-15",
+      "client": "Example Customer",
+      "currency": "EUR",
+      "total": "125.00",
+      "line_items": [
+        {
+          "description": "Product A",
+          "quantity": 2.0,
+          "unit": "EA",
+          "unit_price": "62.50",
+          "line_total": "125.00"
+        }
+      ]
+    },
+    "page2": null,
+    "page3": null
+  }
+}
